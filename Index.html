@@ -550,5 +550,37 @@
       </div>
     </div>
   </div>
+
+  <div class="modal fade" id="auditModal" tabindex="-1">
+  <div class="modal-dialog modal-xl modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header bg-warning text-dark">
+        <h5 class="modal-title fw-bold"><i class="fas fa-link me-2"></i>จับคู่รายชื่อตกหล่น (Name Mapping)</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body p-0 bg-light">
+        <div class="alert alert-warning border-0 rounded-0 mb-0 small">
+          <i class="fas fa-info-circle me-1"></i> 
+          รายชื่อด้านซ้ายคือ <strong>"ชื่อในทะเบียนทรัพย์สิน"</strong> (ที่ยังหาเจ้าของไม่เจอ)<br>
+          ระบบค้นหา <strong>"ชื่อที่ถูกต้องในระบบ"</strong> มาให้แล้ว กรุณากดปุ่ม <strong>"แก้ไข"</strong> เพื่อเปลี่ยนชื่อในทะเบียนทรัพย์สินให้ถูกต้อง
+        </div>
+        <div class="table-responsive">
+          <table class="table table-bordered table-hover align-middle mb-0 bg-white" style="font-size: 0.9rem;">
+            <thead class="table-light sticky-top">
+              <tr class="text-center text-secondary">
+                <th style="width: 30%;">ชื่อในทะเบียนทรัพย์สิน (ผิด)</th>
+                <th style="width: 15%;">Serial</th>
+                <th style="width: 40%;">ชื่อในระบบที่ถูกต้อง (แนะนำ)</th>
+                <th style="width: 15%;">การกระทำ</th>
+              </tr>
+            </thead>
+            <tbody id="auditTableBody">
+               </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
 </body>
 </html>
