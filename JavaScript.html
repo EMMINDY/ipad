@@ -6,13 +6,13 @@
   let currentLevel = '';
   let isReadOnly = false;
   
-  // ตัวแปรสำหรับระบบ Login
+  // Login State
   let currentUserRole = ''; 
   let currentAdvisorName = '';
   let currentAdvisorLevel = ''; 
   let currentAdvisorRoom = '';  
 
-  // ตัวแปรสำหรับ Filter
+  // Filters
   let uniqueLevels = new Set();
   let uniqueRooms = new Set();
 
@@ -25,7 +25,7 @@
   function loadSystemData(callback) {
     google.script.run.withSuccessHandler(function(data) {
       processData(data);
-      $('#loading-spinner').addClass('hidden'); // ซ่อน Loading เมื่อข้อมูลมา
+      $('#loading-spinner').addClass('hidden');
       if(callback) callback();
     }).getAllSystemData();
   }
@@ -34,22 +34,17 @@
     allData = data;
     groupedData = {};
     
-    // จัดกลุ่มข้อมูล
     data.forEach(item => {
       let lvl = item.type === 'teacher' ? 'บุคลากร' : (item.source_sheet.match(/(ม\.\d+)/) ? item.source_sheet.match(/(ม\.\d+)/)[0] : 'อื่นๆ');
       if(!groupedData[lvl]) groupedData[lvl] = [];
       groupedData[lvl].push(item);
     });
     
-    // เตรียมตัวกรองสำหรับ Admin
     initAdminFilters();
 
     // รีเฟรชหน้าจอที่เปิดอยู่
     if(!$('#view-dashboard').hasClass('hidden')) renderDashboard();
-    if(!$('#view-admin').hasClass('hidden')) {
-       // ถ้า Admin เปิดอยู่ ให้กรองและแสดงผลใหม่
-       filterAdminTable(); 
-    }
+    if(!$('#view-admin').hasClass('hidden')) filterAdminTable(); 
     if(!$('#view-table').hasClass('hidden') && currentLevel) {
        let items = groupedData[currentLevel];
        let selected = $('#roomFilter').val();
@@ -64,7 +59,6 @@
     $('#admin-float-btn').removeClass('hidden');
     $('#loading-spinner').removeClass('hidden'); 
     
-    // รอจนกว่าข้อมูลจะพร้อม
     if(allData.length > 0) {
        goHome();
     } else { 
@@ -76,7 +70,7 @@
 
   function goHome() {
     $('.landing-section, #view-table, #view-admin').addClass('hidden');
-    $('#loading-spinner').addClass('hidden'); // ซ่อนตัวหมุน
+    $('#loading-spinner').addClass('hidden');
     $('#main-nav').removeClass('hidden');
     $('#view-dashboard').removeClass('hidden');
     renderDashboard();
@@ -87,12 +81,8 @@
     $('.landing-section').removeClass('hidden');
     $('#loading-spinner').addClass('hidden'); 
     $('#main-nav, #view-dashboard, #view-table, #view-admin').addClass('hidden');
-    
-    // Reset Login State
     isReadOnly = false;
     currentUserRole = '';
-    currentAdvisorName = '';
-    
     window.scrollTo(0, 0);
   }
 
@@ -101,7 +91,7 @@
     $('#view-dashboard').removeClass('hidden');
   }
 
-  // --- 3. USER DASHBOARD & TABLE ---
+  // --- 3. DASHBOARD & TABLE ---
   function renderDashboard() {
     let container = $('#dashboard-grid').empty();
     Object.keys(groupedData).sort().forEach(lvl => {
@@ -156,8 +146,6 @@
       { data: 'docStatus', title: 'เอกสาร', render: d => badgeDoc(d) },
       { data: 'room', title: 'ห้อง', className: 'mobile-hidden' },
       { data: 'serial', title: 'Serial', className: 'mobile-hidden' },
-      
-      // ปุ่มแก้ไข (ซ่อนถ้าเอกสารผ่านแล้ว)
       { 
         title: 'แก้ไข', 
         data: null, 
@@ -181,10 +169,8 @@
   }
 
   // --- 4. ADMIN SYSTEM & FILTERS ---
-  
   function initAdminFilters() {
     uniqueLevels.clear();
-    // เก็บระดับชั้นทั้งหมดที่มี
     allData.forEach(item => {
       let lvl = item.source_sheet.replace('รายชื่อนักเรียน ', '').replace('รายชื่อ', '');
       if(lvl) uniqueLevels.add(lvl);
@@ -195,8 +181,6 @@
     Array.from(uniqueLevels).sort().forEach(l => {
       lvlSelect.append(`<option value="${l}">${l}</option>`);
     });
-    
-    // เริ่มต้นห้อง
     updateRoomFilter();
   }
 
@@ -218,34 +202,25 @@
     });
   }
 
-  // ฟังก์ชันหลักสำหรับกรองและแสดงผลตาราง Admin
   function filterAdminTable() {
-    // ถ้าเปลี่ยนระดับชั้น ให้รีเซ็ตห้อง
     if(event && event.target && event.target.id === 'adminLevelFilter') updateRoomFilter();
 
     let lvl = $('#adminLevelFilter').val();
     let rm = $('#adminRoomFilter').val();
     
-    // กรองข้อมูล
     let filteredData = allData.filter(item => {
       let itemLvl = item.source_sheet.replace('รายชื่อนักเรียน ', '').replace('รายชื่อ', '');
-      
-      // เงื่อนไข Filter ของ Dropdown
       let matchLvl = (lvl === "") || (itemLvl === lvl);
       let matchRoom = (rm === "") || (String(item.room) === String(rm));
       
-      // เงื่อนไข Role (Advisor เห็นแค่ห้องตัวเอง)
       if(currentUserRole === 'advisor') {
          return matchLvl && matchRoom && item.source_sheet.includes(currentAdvisorLevel) && String(item.room) === String(currentAdvisorRoom);
       }
-      
       return matchLvl && matchRoom;
     });
 
-    // แสดงผล Stats (กล่องข้างบน)
     updateAdminStats(filteredData);
 
-    // แสดงผล Table
     if ($.fn.DataTable.isDataTable('#adminTable')) {
         adminTable.clear().rows.add(filteredData).draw();
     } else {
@@ -290,92 +265,148 @@
   function renderAdminDashboard() {
     let titleText = 'ผู้ดูแลระบบ';
     let showAddBtn = true;
-
-    // ถ้าเป็น Advisor ให้ซ่อน Filter บางตัว หรือ ล็อคค่าไว้
     if (currentUserRole === 'advisor') {
         showAddBtn = false;
         titleText = `ครูที่ปรึกษา (${currentAdvisorLevel}/${currentAdvisorRoom})`;
-        // ซ่อน Filter Bar ก็ได้ หรือจะปล่อยไว้แต่เลือกไม่ได้ก็ได้ (ในที่นี้ปล่อยไว้แต่ Logic filter จะจัดการเอง)
     }
-
     $('#admin-title-text').text(titleText);
     if(showAddBtn) $('#btn-add-user').show(); else $('#btn-add-user').hide();
-
-    // เรียกใช้ Filter เพื่อแสดงผลครั้งแรก
     filterAdminTable();
   }
 
-  // --- 5. ADVANCED REPORT ---
-  function openAdvancedReport() {
-    let reportData = {};
+  // --- 5. AUDIT & FIX SYSTEM (CORE FEATURE) ---
+  function openMissingAudit() {
+    new bootstrap.Modal(document.getElementById('auditModal')).show();
+    $('#auditTableBody').html('<tr><td colspan="4" class="text-center py-5"><div class="spinner-border text-warning"></div><div class="mt-2">กำลังวิเคราะห์ข้อมูล...</div></td></tr>');
     
-    // คำนวณยอด
-    allData.forEach(item => {
-      let lvl = item.source_sheet.replace('รายชื่อนักเรียน ', '').replace('รายชื่อ', '');
-      let rm = item.room || 'N/A';
-      
-      // ถ้าเป็น Advisor ให้ดูได้แค่ห้องตัวเอง
-      if(currentUserRole === 'advisor') {
-         if(!item.source_sheet.includes(currentAdvisorLevel) || String(item.room) !== String(currentAdvisorRoom)) return;
-      }
-      
-      if (!reportData[lvl]) reportData[lvl] = {};
-      if (!reportData[lvl][rm]) {
-        reportData[lvl][rm] = { total: 0, borrowSuccess: 0, docPass: 0, notBorrow: 0, returned: 0, fix: 0 };
-      }
-      
-      let stats = reportData[lvl][rm];
-      stats.total++;
-      
-      let s = item.borrowStatus;
-      if (['ยืมอยู่', 'คืนแล้ว', 'ส่งซ่อม'].some(x => s.includes(x))) stats.borrowSuccess++;
-      if (item.docStatus === 'เอกสารผ่าน') stats.docPass++;
+    // เรียก Backend
+    google.script.run.withSuccessHandler(function(orphans) {
+      renderAuditTable(orphans);
+    }).getAssetAuditData();
+  }
 
-      if (s === 'ยังไม่ยืม') stats.notBorrow++;
-      else if (s.includes('คืน')) stats.returned++;
-      else if (s.includes('ซ่อม') || s.includes('สละ')) stats.fix++;
-    });
-
-    // สร้าง HTML
+  function renderAuditTable(orphans) {
     let html = '';
-    let sortedLevels = Object.keys(reportData).sort();
+    
+    if(orphans.length === 0) {
+      html = `<tr><td colspan="4" class="text-center py-5 text-success">
+                <i class="fas fa-check-circle fa-3x mb-3"></i><br>
+                <h5>ยอดเยี่ยม! ไม่พบรายชื่อตกหล่น</h5>
+                ข้อมูลในทะเบียนทรัพย์สินตรงกับรายชื่อทุกคนแล้ว
+              </td></tr>`;
+    } else {
+      orphans.forEach((item, index) => {
+        // Dropdown เลือกชื่อที่ถูกต้องจากชีตนักเรียน/ครู
+        let optionsHtml = '';
+        if(item.suggestions.length > 0) {
+           item.suggestions.forEach(s => {
+             // value เก็บชื่อที่ถูกต้อง (จากชีต นร.)
+             let val = s.name; 
+             optionsHtml += `<option value="${val}">${s.name} <span class="text-muted small">(${s.sheet})</span></option>`;
+           });
+           optionsHtml += `<option value="" disabled>--- ไม่ใช่คนเหล่านี้ ---</option>`;
+        } else {
+           optionsHtml = `<option value="" disabled selected>ไม่พบชื่อใกล้เคียง</option>`;
+        }
 
-    sortedLevels.forEach(lvl => {
-      html += `<tr class="table-dark"><td colspan="7" class="text-start ps-3 fw-bold">${lvl}</td></tr>`;
-      let sortedRooms = Object.keys(reportData[lvl]).sort((a,b) => parseInt(a)-parseInt(b));
-      
-      sortedRooms.forEach(rm => {
-        let r = reportData[lvl][rm];
-        let borrowPct = r.total > 0 ? Math.round((r.borrowSuccess / r.total) * 100) : 0;
-        let docPct = r.total > 0 ? Math.round((r.docPass / r.total) * 100) : 0;
+        let selectId = `match_select_${index}`;
         
-        let barColorBorrow = borrowPct < 50 ? 'bg-danger' : (borrowPct < 80 ? 'bg-warning' : 'bg-success');
-        let barColorDoc = docPct < 50 ? 'bg-danger' : (docPct < 80 ? 'bg-warning' : 'bg-success');
+        // ปุ่มแก้ไข
+        let btnHtml = item.suggestions.length > 0 ? 
+            `<button class="btn btn-sm btn-primary rounded-pill px-3 shadow-sm" onclick="confirmMatch('${item.assetName}', '${item.serial}', '${selectId}')">
+               <i class="fas fa-edit me-1"></i> แก้ไข
+             </button>` : 
+            `<button class="btn btn-sm btn-outline-secondary rounded-pill px-3" disabled>ไม่มีคู่</button>`;
 
         html += `
           <tr>
-            <td class="text-start ps-4 fw-bold">ห้อง ${rm}</td>
-            <td class="fw-bold">${r.total}</td>
-            <td class="align-middle">
-              <div class="d-flex justify-content-between small mb-1"><span>${r.borrowSuccess} คน</span><span class="fw-bold">${borrowPct}%</span></div>
-              <div class="progress" style="height: 6px;"><div class="progress-bar ${barColorBorrow}" style="width: ${borrowPct}%"></div></div>
+            <td class="fw-bold text-danger">${item.assetName} <br><small class="text-muted fw-normal">(ชื่อปัจจุบันในทรัพย์สิน)</small></td>
+            <td class="text-center font-monospace small">${item.serial}</td>
+            <td>
+              <select id="${selectId}" class="form-select form-select-sm shadow-sm border-primary">
+                ${optionsHtml}
+              </select>
             </td>
-            <td class="align-middle">
-              <div class="d-flex justify-content-between small mb-1"><span>${r.docPass} คน</span><span class="fw-bold">${docPct}%</span></div>
-              <div class="progress" style="height: 6px;"><div class="progress-bar ${barColorDoc}" style="width: ${docPct}%"></div></div>
-            </td>
-            <td class="d-none d-md-table-cell text-muted small">${r.notBorrow}</td>
-            <td class="d-none d-md-table-cell text-primary small">${r.returned}</td>
-            <td class="d-none d-md-table-cell text-danger small">${r.fix}</td>
-          </tr>`;
+            <td class="text-center">${btnHtml}</td>
+          </tr>
+        `;
+      });
+    }
+    $('#auditTableBody').html(html);
+  }
+
+  function confirmMatch(oldAssetName, serial, selectId) {
+    let correctName = $(`#${selectId}`).val();
+    if(!correctName) return Swal.fire('แจ้งเตือน', 'กรุณาเลือกรายชื่อที่ถูกต้องจากรายการ', 'warning');
+
+    Swal.fire({
+      title: 'ยืนยันการแก้ไข?',
+      html: `ระบบจะทำการแก้ไขชื่อใน <b>"รายงานทะเบียนทรัพย์สิน"</b><br>
+             จาก: <span class="text-danger">${oldAssetName}</span><br>
+             เป็น: <span class="text-success fw-bold">${correctName}</span>`,
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonColor: '#0d6efd',
+      confirmButtonText: 'ยืนยันการแก้ไข',
+      cancelButtonText: 'ยกเลิก'
+    }).then((result) => {
+      if (result.isConfirmed) {
+        Swal.fire({ title: 'กำลังบันทึก...', didOpen: () => Swal.showLoading() });
+        
+        let data = {
+          oldAssetName: oldAssetName,
+          serial: serial,
+          correctName: correctName
+        };
+
+        google.script.run.withSuccessHandler(res => {
+          if(res.success) {
+            Swal.fire({ icon: 'success', title: 'สำเร็จ', text: 'แก้ไขข้อมูลในทะเบียนทรัพย์สินแล้ว', timer: 1500, showConfirmButton: false });
+            openMissingAudit(); // โหลดตารางใหม่
+            loadSystemData();   // โหลดข้อมูลหลักใหม่
+          } else {
+            Swal.fire('เกิดข้อผิดพลาด', res.message, 'error');
+          }
+        }).adminFixAssetName(data);
+      }
+    });
+  }
+
+  // --- 6. EXPORT & MODALS ---
+  function openExportModal() { let lvl = $('#adminLevelFilter').val(); let rm = $('#adminRoomFilter').val(); let text = "แสดงตามหน้าจอปัจจุบัน"; if(lvl) text += ` (ชั้น ${lvl}`; if(lvl && rm) text += ` ห้อง ${rm})`; else if(lvl) text += ` ทุกห้อง)`; else text = "ทุกระดับชั้น (ยังไม่ได้กรอง)"; $('#exportFilterText').text(text); new bootstrap.Modal(document.getElementById('exportModal')).show(); }
+  function executeExport() { let scope = $('input[name="exportScope"]:checked').val(); let dataToExport = []; if (scope === 'all') { if(currentUserRole === 'advisor') { dataToExport = allData.filter(item => item.source_sheet.includes(currentAdvisorLevel) && String(item.room) === String(currentAdvisorRoom)); } else { dataToExport = allData; } } else { let lvl = $('#adminLevelFilter').val(); let rm = $('#adminRoomFilter').val(); dataToExport = allData.filter(item => { let itemLvl = item.source_sheet.replace('รายชื่อนักเรียน ', '').replace('รายชื่อ', ''); let matchLvl = (lvl === "") || (itemLvl === lvl); let matchRoom = (rm === "") || (String(item.room) === String(rm)); if(currentUserRole === 'advisor') { return matchLvl && matchRoom && item.source_sheet.includes(currentAdvisorLevel) && String(item.room) === String(currentAdvisorRoom); } return matchLvl && matchRoom; }); } if (dataToExport.length === 0) { return Swal.fire('ไม่พบข้อมูล', 'ไม่มีข้อมูลสำหรับการส่งออก', 'warning'); } let csvContent = "\uFEFF"; let headers = []; let keys = []; if($('#col_id').is(':checked')) { headers.push("รหัสประจำตัว"); keys.push("id"); } if($('#col_name').is(':checked')) { headers.push("ชื่อ-นามสกุล"); keys.push("name"); } if($('#col_level').is(':checked')) { headers.push("ระดับชั้น"); keys.push("level_mapped"); } if($('#col_room').is(':checked')) { headers.push("ห้อง"); keys.push("room"); } if($('#col_status').is(':checked')) { headers.push("สถานะเครื่อง"); keys.push("borrowStatus"); } if($('#col_doc').is(':checked')) { headers.push("สถานะเอกสาร"); keys.push("docStatus"); } if($('#col_serial').is(':checked')) { headers.push("Serial Number"); keys.push("serial"); } csvContent += headers.join(",") + "\n"; dataToExport.forEach(item => { let row = []; keys.forEach(k => { let val = ""; if (k === 'level_mapped') { val = item.source_sheet.replace('รายชื่อนักเรียน ', '').replace('รายชื่อ', ''); } else { val = item[k] || "-"; } val = String(val).replace(/,/g, " "); row.push(val); }); csvContent += row.join(",") + "\n"; }); let encodedUri = encodeURI(csvContent); let blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' }); let link = document.createElement("a"); let url = URL.createObjectURL(blob); let filename = "iPad_Data_Export_" + new Date().toISOString().slice(0,10) + ".csv"; link.setAttribute("href", url); link.setAttribute("download", filename); link.style.visibility = 'hidden'; document.body.appendChild(link); link.click(); document.body.removeChild(link); bootstrap.Modal.getInstance(document.getElementById('exportModal')).hide(); Swal.fire({ icon: 'success', title: 'ดาวน์โหลดเสร็จสิ้น', timer: 1500, showConfirmButton: false }); }
+
+  function openAdvancedReport() {
+    let reportData = {};
+    allData.forEach(item => {
+      let lvl = item.source_sheet.replace('รายชื่อนักเรียน ', '').replace('รายชื่อ', '');
+      let rm = item.room || 'N/A';
+      if(currentUserRole === 'advisor') { if(!item.source_sheet.includes(currentAdvisorLevel) || String(item.room) !== String(currentAdvisorRoom)) return; }
+      if (!reportData[lvl]) reportData[lvl] = {};
+      if (!reportData[lvl][rm]) reportData[lvl][rm] = { total: 0, borrowSuccess: 0, docPass: 0, notBorrow: 0, returned: 0, fix: 0 };
+      let stats = reportData[lvl][rm];
+      stats.total++;
+      let s = item.borrowStatus;
+      if (['ยืมอยู่', 'คืนแล้ว', 'ส่งซ่อม'].some(x => s.includes(x))) stats.borrowSuccess++;
+      if (item.docStatus === 'เอกสารผ่าน') stats.docPass++;
+      if (s === 'ยังไม่ยืม') stats.notBorrow++; else if (s.includes('คืน')) stats.returned++; else if (s.includes('ซ่อม') || s.includes('สละ')) stats.fix++;
+    });
+    let html = '';
+    Object.keys(reportData).sort().forEach(lvl => {
+      html += `<tr class="table-dark"><td colspan="7" class="text-start ps-3 fw-bold">${lvl}</td></tr>`;
+      Object.keys(reportData[lvl]).sort((a,b) => parseInt(a)-parseInt(b)).forEach(rm => {
+        let r = reportData[lvl][rm];
+        let borrowPct = r.total > 0 ? Math.round((r.borrowSuccess / r.total) * 100) : 0;
+        let docPct = r.total > 0 ? Math.round((r.docPass / r.total) * 100) : 0;
+        let barColorBorrow = borrowPct < 50 ? 'bg-danger' : (borrowPct < 80 ? 'bg-warning' : 'bg-success');
+        let barColorDoc = docPct < 50 ? 'bg-danger' : (docPct < 80 ? 'bg-warning' : 'bg-success');
+        html += `<tr><td class="text-start ps-4 fw-bold">ห้อง ${rm}</td><td class="fw-bold">${r.total}</td><td class="align-middle"><div class="d-flex justify-content-between small mb-1"><span>${r.borrowSuccess} คน</span><span class="fw-bold">${borrowPct}%</span></div><div class="progress" style="height: 6px;"><div class="progress-bar ${barColorBorrow}" style="width: ${borrowPct}%"></div></div></td><td class="align-middle"><div class="d-flex justify-content-between small mb-1"><span>${r.docPass} คน</span><span class="fw-bold">${docPct}%</span></div><div class="progress" style="height: 6px;"><div class="progress-bar ${barColorDoc}" style="width: ${docPct}%"></div></div></td><td class="d-none d-md-table-cell text-muted small">${r.notBorrow}</td><td class="d-none d-md-table-cell text-primary small">${r.returned}</td><td class="d-none d-md-table-cell text-danger small">${r.fix}</td></tr>`;
       });
     });
-
     $('#reportTableBody').html(html);
     new bootstrap.Modal(document.getElementById('reportModal')).show();
   }
 
-  // --- 6. HELPERS (Badges & Modals) ---
   function badgeBorrow(status) {
     if (status === 'ยืมอยู่') return `<span class="badge bg-success text-white"><i class="fas fa-tablet-alt"></i> ยืมอยู่</span>`;
     if (status === 'คืนแล้ว') return `<span class="badge bg-primary text-white"><i class="fas fa-inbox"></i> คืนแล้ว</span>`;
@@ -390,7 +421,6 @@
     if (status === 'รอตรวจสอบ') return `<span class="badge bg-warning text-dark border border-warning"><i class="fas fa-clock"></i> รอตรวจ</span>`;
     return `<span class="badge bg-light text-muted border fw-normal"><i class="fas fa-minus"></i> ยังไม่ส่ง</span>`;
   }
-
   // --- 7. LOGIN & ACTIONS ---
   function showAdminLogin() { new bootstrap.Modal(document.getElementById('adminLoginModal')).show(); }
   function showAdvisorLogin() { new bootstrap.Modal(document.getElementById('advisorLoginModal')).show(); }
@@ -454,7 +484,22 @@
     $('select[name="statusSelect"]').val(row.borrowStatus);
 
     if(row.type === 'student') $('#studentFields').show(); else $('#studentFields').hide();
+    
+    // Clear previous values
     $('input[type="file"]').val(''); $('textarea').val('');
+
+    // --- NEW LOGIC: ตรวจสอบสถานะเอกสาร ---
+    // ถ้าสถานะเป็น "รอตรวจสอบ" ให้ปิดการแก้ไขทั้งหมด
+    if (row.docStatus === 'รอตรวจสอบ') {
+       // Disable inputs & submit button
+       $('#updateForm input, #updateForm select, #updateForm textarea').prop('disabled', true);
+       $('#btnSubmit').prop('disabled', true).html('<i class="fas fa-lock"></i> อยู่ระหว่างตรวจสอบ');
+    } else {
+       // Enable กลับคืน
+       $('#updateForm input, #updateForm select, #updateForm textarea').prop('disabled', false);
+       $('#btnSubmit').prop('disabled', false).html('บันทึก');
+    }
+
     new bootstrap.Modal(document.getElementById('actionModal')).show();
   }
 
@@ -540,10 +585,9 @@
       }
     });
   }
-
+  
   // --- EXPORT SYSTEM ---
   function openExportModal() {
-    // อัปเดตข้อความให้รู้ว่าตอนนี้กรองอะไรอยู่
     let lvl = $('#adminLevelFilter').val();
     let rm = $('#adminRoomFilter').val();
     let text = "แสดงตามหน้าจอปัจจุบัน";
@@ -557,20 +601,16 @@
   }
 
   function executeExport() {
-    // 1. หา Data Source (ทั้งหมด vs กรองแล้ว)
     let scope = $('input[name="exportScope"]:checked').val();
     let dataToExport = [];
 
     if (scope === 'all') {
-      // ถ้าเป็น Advisor ต้องกรองให้เหลือแค่ของตัวเองอยู่ดี
       if(currentUserRole === 'advisor') {
          dataToExport = allData.filter(item => item.source_sheet.includes(currentAdvisorLevel) && String(item.room) === String(currentAdvisorRoom));
       } else {
          dataToExport = allData;
       }
     } else {
-      // ใช้ข้อมูลที่กรองอยู่ใน DataTable ปัจจุบัน
-      // เราดึงจาก filteredData Logic เดียวกับ function filterAdminTable
       let lvl = $('#adminLevelFilter').val();
       let rm = $('#adminRoomFilter').val();
       dataToExport = allData.filter(item => {
@@ -589,24 +629,20 @@
       return Swal.fire('ไม่พบข้อมูล', 'ไม่มีข้อมูลสำหรับการส่งออก', 'warning');
     }
 
-    // 2. เตรียม Header และ Columns
-    let csvContent = "\uFEFF"; // BOM สำหรับภาษาไทย
+    let csvContent = "\uFEFF"; 
     let headers = [];
     let keys = [];
 
-    // เช็คว่า user เลือกคอลัมน์ไหนบ้าง
     if($('#col_id').is(':checked')) { headers.push("รหัสประจำตัว"); keys.push("id"); }
     if($('#col_name').is(':checked')) { headers.push("ชื่อ-นามสกุล"); keys.push("name"); }
-    if($('#col_level').is(':checked')) { headers.push("ระดับชั้น"); keys.push("level_mapped"); } // สร้าง key พิเศษ
+    if($('#col_level').is(':checked')) { headers.push("ระดับชั้น"); keys.push("level_mapped"); } 
     if($('#col_room').is(':checked')) { headers.push("ห้อง"); keys.push("room"); }
     if($('#col_status').is(':checked')) { headers.push("สถานะเครื่อง"); keys.push("borrowStatus"); }
     if($('#col_doc').is(':checked')) { headers.push("สถานะเอกสาร"); keys.push("docStatus"); }
     if($('#col_serial').is(':checked')) { headers.push("Serial Number"); keys.push("serial"); }
-    // Note ไม่มีใน object หลัก ต้องดึงเพิ่มถ้าจะเอาจริงจัง แต่เบื้องต้นเอาแค่นี้ก่อน
 
     csvContent += headers.join(",") + "\n";
 
-    // 3. วนลูปสร้างเนื้อหา
     dataToExport.forEach(item => {
       let row = [];
       keys.forEach(k => {
@@ -616,19 +652,16 @@
         } else {
            val = item[k] || "-";
         }
-        // จัดการเรื่องเครื่องหมาย , ในข้อมูล (ถ้ามี)
         val = String(val).replace(/,/g, " "); 
         row.push(val);
       });
       csvContent += row.join(",") + "\n";
     });
 
-    // 4. สร้างไฟล์และดาวน์โหลด
     let encodedUri = encodeURI(csvContent);
     let blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     let link = document.createElement("a");
     let url = URL.createObjectURL(blob);
-    
     let filename = "iPad_Data_Export_" + new Date().toISOString().slice(0,10) + ".csv";
     
     link.setAttribute("href", url);
@@ -638,14 +671,12 @@
     link.click();
     document.body.removeChild(link);
 
-    // ปิด Modal
     bootstrap.Modal.getInstance(document.getElementById('exportModal')).hide();
     Swal.fire({ icon: 'success', title: 'ดาวน์โหลดเสร็จสิ้น', timer: 1500, showConfirmButton: false });
   }
 
   // --- REFRESH DATA SYSTEM ---
   function refreshSystemData() {
-    // 1. แสดงสถานะกำลังโหลด
     Swal.fire({
       title: 'กำลังดึงข้อมูลใหม่...',
       text: 'ระบบกำลังอ่านข้อมูลจากชีต "ทะเบียนทรัพย์สิน" และ "รายชื่อ"',
@@ -653,9 +684,7 @@
       didOpen: () => { Swal.showLoading(); }
     });
 
-    // 2. เรียกฟังก์ชันโหลดข้อมูลใหม่ (ใช้ loadSystemData ตัวเดิมที่มีอยู่แล้ว)
     loadSystemData(() => {
-      // 3. เมื่อเสร็จแล้ว แจ้งเตือน
       Swal.fire({
         icon: 'success',
         title: 'อัปเดตเรียบร้อย',
@@ -663,31 +692,23 @@
         timer: 1500,
         showConfirmButton: false
       });
-      
-      // (ระบบจะทำการ render ตารางและ dashboard ใหม่ให้อัตโนมัติจากใน function processData)
     });
   }
 
-  // --- AUDIT SYSTEM (ตรวจสอบรายชื่อตกหล่น) ---
+  // --- AUDIT SYSTEM ---
   function openMissingAudit() {
-    // 1. กรองหาคนที่ไม่พบในชีต Asset (inAsset === false)
     let missingList = allData.filter(item => {
-      // ถ้าเป็น Advisor ต้องดูแค่ห้องตัวเอง
       if(currentUserRole === 'advisor') {
          if(!item.source_sheet.includes(currentAdvisorLevel) || String(item.room) !== String(currentAdvisorRoom)) return false;
       }
-      
-      // เงื่อนไข: inAsset ต้องเป็น false (ไม่มีชื่อในทรัพย์สิน)
       return item.inAsset === false;
     });
 
-    // 2. เรียงลำดับตาม ระดับชั้น -> ห้อง
     missingList.sort((a,b) => {
       if(a.source_sheet !== b.source_sheet) return a.source_sheet.localeCompare(b.source_sheet);
       return parseInt(a.room) - parseInt(b.room);
     });
 
-    // 3. สร้างตาราง
     let html = '';
     if(missingList.length === 0) {
       html = '<tr><td colspan="4" class="py-5 text-success"><i class="fas fa-check-circle fa-3x mb-3"></i><br>สุดยอด! ข้อมูลครบถ้วนสมบูรณ์<br>ทุกคนมีรายชื่อในทะเบียนทรัพย์สินแล้ว</td></tr>';
