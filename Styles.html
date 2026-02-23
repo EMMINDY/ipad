@@ -250,4 +250,152 @@
     .card { box-shadow: none !important; border: 1px solid #dee2e6 !important; }
     .badge { border: 1px solid currentColor; }
   }
+
+  /* ══════════════════════════════════════════════════════════
+     STATUS CARD (ปรับปรุงใหม่ — หน้าตรวจสอบสถานะ)
+     ══════════════════════════════════════════════════════════ */
+
+  /* การ์ดหลัก */
+  .status-card {
+    background: #fff;
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 1px 8px rgba(0,0,0,.07);
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+    animation: cardSlideIn 0.22s ease both;
+  }
+  .status-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(0,0,0,.12);
+  }
+  @keyframes cardSlideIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  /* Stagger animation */
+  .status-card:nth-child(1)  { animation-delay: 0.00s; }
+  .status-card:nth-child(2)  { animation-delay: 0.04s; }
+  .status-card:nth-child(3)  { animation-delay: 0.08s; }
+  .status-card:nth-child(4)  { animation-delay: 0.12s; }
+  .status-card:nth-child(5)  { animation-delay: 0.16s; }
+  .status-card:nth-child(6)  { animation-delay: 0.20s; }
+  .status-card:nth-child(7)  { animation-delay: 0.24s; }
+  .status-card:nth-child(n+8){ animation-delay: 0.28s; }
+
+  /* Expand/Collapse extra info */
+  .status-card-extra {
+    display: none;
+    border-top: 1px solid #f3f3f3;
+    margin-top: 10px;
+    padding-top: 10px;
+    font-size: .82rem;
+  }
+
+  /* ปุ่ม toggle expand */
+  .expand-toggle-btn {
+    background: none;
+    border: none;
+    padding: 0;
+    font-size: .75rem;
+    color: #999;
+    cursor: pointer;
+    line-height: 1;
+    transition: color .15s ease;
+  }
+  .expand-toggle-btn:hover { color: #1a73e8; }
+  .expand-chevron { display: inline-block; transition: transform 0.2s ease; }
+
+  /* ปุ่มอัปโหลดเอกสาร */
+  .card-upload-btn {
+    background: #f0f4ff;
+    color: #1a73e8;
+    border: 1.5px solid #d0e0ff;
+    border-radius: 20px;
+    font-size: .75rem;
+    padding: 4px 14px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background .15s, color .15s, border-color .15s;
+    white-space: nowrap;
+  }
+  .card-upload-btn:hover {
+    background: #1a73e8;
+    color: #fff;
+    border-color: #1a73e8;
+  }
+
+  /* ปุ่มเอกสาร PDF ใน expand */
+  .doc-link-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: .72rem;
+    font-weight: 600;
+    padding: 3px 12px;
+    border-radius: 20px;
+    text-decoration: none;
+    transition: opacity .15s;
+  }
+  .doc-link-pill:hover { opacity: .85; }
+
+  /* mini stats ใน view-table */
+  .mini-stat-tile {
+    border-radius: 10px;
+    padding: 10px 6px;
+    text-align: center;
+  }
+  #table-mini-stats .progress {
+    border-radius: 999px;
+    overflow: hidden;
+  }
+  #table-mini-stats .progress-bar {
+    border-radius: 999px;
+    transition: width 0.7s ease;
+  }
+
+  /* progress bar ห้อง */
+  .room-progress {
+    height: 5px;
+    border-radius: 999px;
+    background: #e9ecef;
+    overflow: hidden;
+    margin-bottom: 10px;
+  }
+  .room-progress-bar {
+    height: 100%;
+    border-radius: 999px;
+    transition: width .7s ease;
+  }
+
+  /* Search highlight */
+  mark {
+    background: #fff176;
+    padding: 0 2px;
+    border-radius: 2px;
+  }
+
+  /* Filter bar search */
+  #tableSearchInput {
+    background: #f0f4ff !important;
+    border: none !important;
+    font-weight: 600;
+  }
+  #tableSearchInput:focus {
+    box-shadow: none !important;
+  }
+
+  /* Legend dots */
+  .status-legend-dot {
+    display: inline-block;
+    width: 9px; height: 9px;
+    border-radius: 50%;
+    vertical-align: middle;
+    margin-right: 4px;
+  }
+
+  /* card-grid สำหรับรายชื่อ */
+  .status-card-grid {
+    display: grid;
+    gap: 8px;
+  }
 </style>
