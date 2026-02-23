@@ -293,18 +293,32 @@ function clearTableSearch() {
   applyTableFilters();
 }
 
-function getFilteredTableRows(roomV, statusV, docV) {
+function getFilteredTableRows(roomV, statusV, docV, returnDocV) {
   // ถ้าไม่ได้ส่งมา ให้อ่านจาก DOM (backward-compat)
   if (roomV   === undefined) roomV   = (document.getElementById('roomFilter')   || {}).value || '';
   if (statusV === undefined) statusV = (document.getElementById('statusFilter') || {}).value || '';
   if (docV    === undefined) docV    = (document.getElementById('docFilter')    || {}).value || '';
+  
+  // เพิ่มการรับค่าตัวกรอง สถานะเอกสารการคืน (ถ้ามี dropdown id="returnDocFilter")
+  if (returnDocV === undefined) returnDocV = (document.getElementById('returnDocFilter') || {}).value || '';
+  
   var q = _tableSearchQuery;
 
   var rows = systemData.filter(function (p) {
     if ((p.source_sheet || '') !== currentLevel) return false;
-    if (roomV   && (p.room || '') !== roomV) return false;
-    if (statusV && (p.borrowStatus || '') !== statusV) return false;
-    if (docV    && (p.docStatus || 'ยังไม่ส่ง') !== docV) return false;
+    
+    // แก้ปัญหาที่ 1: เลือกห้องแล้วไม่แสดง (แปลงเป็น String ก่อนเปรียบเทียบค่า)
+    if (roomV   && String(p.room || '') !== String(roomV)) return false;
+    
+    // แปลงสถานะอื่นเป็น String ด้วยเพื่อความปลอดภัยป้องกันบั๊ก
+    if (statusV && String(p.borrowStatus || '') !== String(statusV)) return false;
+    
+    // กรองสถานะเอกสารยืม
+    if (docV    && String(p.docStatus || 'ยังไม่ส่ง') !== String(docV)) return false;
+    
+    // แก้ปัญหาที่ 2: กรองสถานะเอกสารคืน (ถ้ามีการเลือกกรอง)
+    if (returnDocV && String(p.returnDocStatus || 'ยังไม่ส่ง') !== String(returnDocV)) return false;
+
     if (q) {
       var hit = String(p.name||'').toLowerCase().indexOf(q) >= 0
              || String(p.id||'').toLowerCase().indexOf(q) >= 0
@@ -313,7 +327,11 @@ function getFilteredTableRows(roomV, statusV, docV) {
     }
     return true;
   });
-  rows.sort(function (a, b) { return String(a.room||'').localeCompare(String(b.room||'')) || String(a.name||'').localeCompare(String(b.name||''), 'th'); });
+  
+  rows.sort(function (a, b) { 
+    return String(a.room||'').localeCompare(String(b.room||'')) || String(a.name||'').localeCompare(String(b.name||''), 'th'); 
+  });
+  
   return rows;
 }
 
@@ -473,7 +491,7 @@ function renderTable(rows) {
       if (s === 'ยืมอยู่' || s === 'อยู่ระหว่างการส่งคืน') roomBorrowed++;
       if (s === 'คืนแล้ว') roomRet++;
     });
-    var roomPct = Math.round((roomBorrowed / list.length) * 100);
+    var roomPct = Math.round((roomBorrowed / list.length) * 100) || 0;
 
     html += '<div class="mb-4">';
 
@@ -511,32 +529,29 @@ function renderTable(rows) {
       var dsc = _docConf(ds);
       var rsc = _docConf(rds);
 
-      var hasSerial  = sn && sn !== '-';
-      var hasNote    = !!note;
+      var hasSerial    = sn && sn !== '-';
+      var hasNote      = !!note;
       var hasBorrowDoc = !!(r.files && r.files.agreement) || !!(r.docUrl);
       var hasReturnDoc = !!(r.returnDocUrl);
-      var hasExtra   = hasSerial || hasNote || hasBorrowDoc || hasReturnDoc;
+      var hasExtra     = hasSerial || hasNote || hasBorrowDoc || hasReturnDoc;
 
       // highlight
       var dName   = _hlText(escapeHtml(r.name || ''), q);
       var dId     = _hlText(escapeHtml(String(r.id || '')), q);
       var dSerial = hasSerial ? _hlText(escapeHtml(sn), q) : '';
 
-      // doc flow
-      var hasReturnInfo = hasReturnDoc || rds !== 'ยังไม่ส่ง';
+      // doc flow (แก้ไขให้แสดง 2 สถานะคู่กันเสมอ)
       var docFlow =
         '<div class="d-flex align-items-center flex-wrap mb-2" style="gap:6px;">' +
-          '<span style="opacity:.5;font-size:.7rem;">📄 ยืม</span>' +
-          '<span style="background:' + dsc.bg + ';color:' + dsc.color + ';font-size:.7rem;font-weight:700;padding:3px 9px;border-radius:20px;">' +
-            dsc.icon + ' ' + escapeHtml(ds) +
+          '<span style="opacity:.6;font-size:.7rem;">📄 ยืม:</span>' +
+          '<span style="background:' + (dsc.bg || '#eee') + ';color:' + (dsc.color || '#333') + ';font-size:.7rem;font-weight:700;padding:3px 9px;border-radius:20px;">' +
+             (dsc.icon || '') + ' ' + escapeHtml(ds) +
           '</span>' +
-          (hasReturnInfo
-            ? '<span style="color:#d0d0d0;font-size:.75rem;">›</span>' +
-              '<span style="opacity:.5;font-size:.7rem;">📦 คืน</span>' +
-              '<span style="background:' + rsc.bg + ';color:' + rsc.color + ';font-size:.7rem;font-weight:700;padding:3px 9px;border-radius:20px;">' +
-                rsc.icon + ' ' + escapeHtml(rds) +
-              '</span>'
-            : '') +
+          '<span style="color:#d0d0d0;font-size:.75rem;margin:0 2px;">|</span>' +
+          '<span style="opacity:.6;font-size:.7rem;">📦 คืน:</span>' +
+          '<span style="background:' + (rsc.bg || '#eee') + ';color:' + (rsc.color || '#333') + ';font-size:.7rem;font-weight:700;padding:3px 9px;border-radius:20px;">' +
+             (rsc.icon || '') + ' ' + escapeHtml(rds) +
+          '</span>' +
         '</div>';
 
       // expand content
@@ -545,16 +560,16 @@ function renderTable(rows) {
         var docLinks = '';
         if (hasBorrowDoc) {
           var bUrl = (r.files && r.files.agreement) ? r.files.agreement : (r.docUrl || '');
-          if (bUrl) docLinks += '<a href="' + escapeHtml(bUrl) + '" target="_blank" class="doc-link-pill" style="background:#d4edda;color:#1e7e34;border:1px solid #c3e6cb;">' +
+          if (bUrl) docLinks += '<a href="' + escapeHtml(bUrl) + '" target="_blank" class="doc-link-pill" style="background:#d4edda;color:#1e7e34;border:1px solid #c3e6cb;padding:3px 8px;border-radius:15px;text-decoration:none;font-size:.75rem;">' +
             '<i class="fas fa-file-pdf" style="font-size:.7rem;"></i> เอกสารยืม</a>';
         }
         if (hasReturnDoc) {
-          docLinks += '<a href="' + escapeHtml(r.returnDocUrl) + '" target="_blank" class="doc-link-pill" style="background:#cce5ff;color:#004085;border:1px solid #b8daff;">' +
+          docLinks += '<a href="' + escapeHtml(r.returnDocUrl) + '" target="_blank" class="doc-link-pill" style="background:#cce5ff;color:#004085;border:1px solid #b8daff;padding:3px 8px;border-radius:15px;text-decoration:none;font-size:.75rem;">' +
             '<i class="fas fa-file-pdf" style="font-size:.7rem;"></i> เอกสารคืน</a>';
         }
 
         expandHtml =
-          '<div class="status-card-extra" id="extra_' + cardId + '">' +
+          '<div class="status-card-extra mt-2 pt-2" id="extra_' + cardId + '" style="border-top:1px dashed #eee;">' +
             (hasSerial
               ? '<div class="mb-1"><i class="fas fa-barcode me-1 text-muted"></i><span class="text-muted">Serial:</span> ' +
                 '<code style="background:#f4f4f4;padding:2px 7px;border-radius:5px;color:#444;font-size:.76rem;">' + dSerial + '</code></div>'
@@ -569,17 +584,17 @@ function renderTable(rows) {
       }
 
       html +=
-        '<div class="status-card" style="border-left:4px solid ' + sc.border + ';">' +
+        '<div class="status-card" style="border-left:4px solid ' + (sc.border || '#ccc') + ';">' +
           '<div class="p-3">' +
 
             // Row 1: Name + badge
             '<div class="d-flex align-items-start justify-content-between gap-2 mb-1">' +
               '<div class="fw-bold text-truncate" style="font-size:.93rem;color:#1a1a2e;flex:1;min-width:0;line-height:1.3;">' +
-                '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + sc.border + ';margin-right:7px;flex-shrink:0;vertical-align:middle;"></span>' +
+                '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + (sc.border || '#ccc') + ';margin-right:7px;flex-shrink:0;vertical-align:middle;"></span>' +
                 dName +
               '</div>' +
-              '<span style="background:' + sc.bg + ';color:' + sc.color + ';font-size:.72rem;font-weight:700;padding:4px 10px;border-radius:20px;white-space:nowrap;flex-shrink:0;">' +
-                sc.icon + ' ' + escapeHtml(bs) +
+              '<span style="background:' + (sc.bg || '#eee') + ';color:' + (sc.color || '#333') + ';font-size:.72rem;font-weight:700;padding:4px 10px;border-radius:20px;white-space:nowrap;flex-shrink:0;">' +
+                (sc.icon || '') + ' ' + escapeHtml(bs) +
               '</span>' +
             '</div>' +
 
@@ -593,7 +608,7 @@ function renderTable(rows) {
             docFlow +
 
             // Row 4: Actions
-            '<div class="d-flex align-items-center justify-content-between">' +
+            '<div class="d-flex align-items-center justify-content-between mt-1">' +
               (hasExtra
                 ? '<button class="expand-toggle-btn" onclick="_toggleCardExtra(\'' + cardId + '\')">' +
                     '<i class="fas fa-chevron-down expand-chevron me-1" id="chev_' + cardId + '"></i>' +
