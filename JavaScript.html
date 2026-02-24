@@ -6,6 +6,7 @@
 // ─── State Variables ───────────────────────────────────────
 var systemData        = [];
 var currentLevel      = '';
+var currentRoom       = '';
 var adminMode         = 'all';
 var currentUser       = null;
 var dataTableInstance = null;
@@ -151,6 +152,14 @@ function confirmAction(title, text, confirmText) {
 $(document).ready(function () {
   var loader = document.getElementById('initial-page-loader');
   if (loader) loader.style.display = 'none';
+  // ── Preload data ในพื้นหลัง ──
+  setTimeout(function() {
+    if (!_dataLoaded) {
+      _loadSystemDataWithRetry(0, function() {
+        // data พร้อมใน background แล้ว
+      }, function() { /* silent fail — จะ retry เมื่อผู้ใช้กด */ });
+    }
+  }, 600);
 });
 
 // ==========================================
@@ -158,7 +167,7 @@ $(document).ready(function () {
 // ==========================================
 
 function showView(id) {
-  ['view-landing', 'view-dashboard', 'view-table', 'view-admin'].forEach(function (v) {
+  ['view-landing', 'view-dashboard', 'view-room', 'view-table', 'view-admin'].forEach(function (v) {
     var el = document.getElementById(v);
     if (el) el.classList.add('hidden');
   });
@@ -188,13 +197,26 @@ function goHome() {
       loadAdminView();
     }
   } else {
-    showView('view-dashboard');
-    if (_dataLoaded && systemData.length) {
-      renderDashboardGrid();
-    } else {
-      loadDashboard();
-    }
+    goToDashboard();
   }
+}
+
+function goToDashboard() {
+  showView('view-dashboard');
+  if (_dataLoaded && systemData.length) {
+    renderDashboardGrid();
+  } else {
+    loadDashboard();
+  }
+}
+
+// Alias สำหรับ backward-compat
+function goBackToDashboard() { goToDashboard(); }
+
+function goToRoomPicker() {
+  if (!currentLevel) { goToDashboard(); return; }
+  showView('view-room');
+  renderRoomPicker(currentLevel);
 }
 
 function enterSystem() {
@@ -207,77 +229,305 @@ function enterSystem() {
 }
 
 // ==========================================
-// DASHBOARD
+// DASHBOARD — Step 1: เลือกระดับชั้น
 // ==========================================
+
+// ── ฟังก์ชัน retry wrapper สำหรับ GAS calls ──
+var _retryCount = 0;
+var _MAX_RETRY  = 2;
+
+function _callWithRetry(fn, onSuccess, onFail, retryMsg) {
+  function attempt(n) {
+    google.script.run
+      .withSuccessHandler(function(data) { _retryCount = 0; onSuccess(data); })
+      .withFailureHandler(function(err) {
+        var msg = (err && err.message) ? err.message : String(err || '');
+        var isBusy = msg.indexOf('ยุ่งอยู่') >= 0 || msg.indexOf('timeout') >= 0 || msg.indexOf('lock') >= 0;
+        if (isBusy && n < _MAX_RETRY) {
+          var wait = (n + 1) * 2000;
+          showGlobalLoading((retryMsg || 'กำลังโหลด') + ' (ลองใหม่ครั้งที่ ' + (n+1) + '...)');
+          setTimeout(function() { attempt(n + 1); }, wait);
+        } else {
+          _retryCount = 0;
+          if (typeof onFail === 'function') onFail(err);
+        }
+      })
+      [fn.name || 'getAllSystemData'].apply(google.script.run, fn.args || []);
+  }
+  attempt(0);
+}
 
 function loadDashboard() {
   showGlobalLoading('กำลังโหลดข้อมูล...');
+
+  if (_dataLoaded && systemData.length) {
+    _updateDashboardStats();
+    renderDashboardGrid();
+    hideGlobalLoading();
+    return;
+  }
+
+  // Quick stats ก่อน (เร็ว — โหลดสถิติสำหรับ grid)
   google.script.run
-    .withSuccessHandler(function (data) {
-      systemData  = data || [];
+    .withSuccessHandler(function(stats) {
+      if (!stats) return;
+      document.getElementById('totalAssetsText').textContent   = 2085;
+      document.getElementById('borrowedCountText').textContent  = stats.borrowed || 0;
+      document.getElementById('availableCountText').textContent = 2085 - (stats.borrowed || 0);
+      _renderDashboardFromStats(stats.levels || {});
+    })
+    .withFailureHandler(function() {})
+    .getQuickStats();
+
+  // Full data — retry อัตโนมัติ ถ้า busy
+  _loadSystemDataWithRetry(0, function() {
+    _updateDashboardStats();
+    renderDashboardGrid();
+    hideGlobalLoading();
+    if (!systemData.length) {
+      Swal.fire({ icon:'info', title:'ไม่พบรายชื่อ', text:'กรุณาตรวจสอบชีตใน Google Sheets' });
+    }
+  }, function(err) {
+    hideGlobalLoading();
+    showError(err);
+  });
+}
+
+/**
+ * โหลด systemData พร้อม retry อัตโนมัติ (สูงสุด 3 ครั้ง, ห่างกัน 3 วินาที)
+ */
+function _loadSystemDataWithRetry(attempt, onSuccess, onFail) {
+  var MAX = 3;
+  google.script.run
+    .withSuccessHandler(function(data) {
+      systemData = data || [];
+      uploadDocPersonList = systemData;
       _dataLoaded = true;
-      var borrowed = 0;
-      systemData.forEach(function(p) {
-        var s = p.borrowStatus || '';
-        if (s === 'ยืมอยู่' || s === 'อยู่ระหว่างการส่งคืน') borrowed++;
-      });
-      var setEl = function(id, v) { var e = document.getElementById(id); if(e) e.textContent = v; };
-      setEl('totalAssetsText', 2085);
-      setEl('borrowedCountText', borrowed);
-      setEl('availableCountText', 2085 - borrowed);
-      renderDashboardGrid();
-      hideGlobalLoading();
-      if (!systemData.length) {
-        Swal.fire({ icon: 'info', title: 'ไม่พบรายชื่อ', text: 'กรุณาตรวจสอบชื่อชีตใน Google Sheets' });
+      onSuccess();
+    })
+    .withFailureHandler(function(err) {
+      var msg = (err && err.message) ? err.message : String(err || '');
+      var isRetryable = msg.indexOf('ยุ่งอยู่') >= 0 ||
+                        msg.indexOf('lock') >= 0 ||
+                        msg.indexOf('timeout') >= 0 ||
+                        msg.indexOf('Timeout') >= 0;
+      if (isRetryable && attempt < MAX) {
+        var wait = (attempt + 1) * 3000; // 3s, 6s, 9s
+        showGlobalLoading('กำลังโหลดข้อมูล... (ลองใหม่ครั้งที่ ' + (attempt+1) + ')');
+        setTimeout(function() { _loadSystemDataWithRetry(attempt + 1, onSuccess, onFail); }, wait);
+      } else {
+        onFail(err);
       }
     })
-    .withFailureHandler(function (err) { hideGlobalLoading(); showError(err); })
     .getAllSystemData();
+}
+
+function _updateDashboardStats() {
+  var borrowed = 0;
+  systemData.forEach(function(p) {
+    var s = p.borrowStatus || '';
+    if (s === 'ยืมอยู่' || s === 'อยู่ระหว่างการส่งคืน') borrowed++;
+  });
+  document.getElementById('totalAssetsText').textContent   = 2085;
+  document.getElementById('borrowedCountText').textContent  = borrowed;
+  document.getElementById('availableCountText').textContent = 2085 - borrowed;
+}
+
+function _renderDashboardFromStats(levels) {
+  var LEVELS = [
+    { key:'รายชื่อนักเรียน ม.3', label:'ม.3', icon:'fas fa-graduation-cap', color:'#0d6efd' },
+    { key:'รายชื่อนักเรียน ม.4', label:'ม.4', icon:'fas fa-graduation-cap', color:'#6f42c1' },
+    { key:'รายชื่อนักเรียน ม.5', label:'ม.5', icon:'fas fa-graduation-cap', color:'#198754' },
+    { key:'รายชื่อนักเรียน ม.6', label:'ม.6', icon:'fas fa-graduation-cap', color:'#dc3545' },
+    { key:'รายชื่อครู',           label:'ครู',  icon:'fas fa-chalkboard-teacher', color:'#0dcaf0' }
+  ];
+  var html = '';
+  LEVELS.forEach(function(lv) {
+    var c = levels[lv.key] || 0;
+    html += '<div class="col-6 col-md-3">' +
+      '<div class="level-card" onclick="openLevel(\'' + escapeHtml(lv.key) + '\')" style="--lc:' + lv.color + ';">' +
+        '<div class="level-icon" style="color:' + lv.color + ';"><i class="' + lv.icon + '"></i></div>' +
+        '<div class="level-label">' + lv.label + '</div>' +
+        '<div class="level-count">' + c + ' คน</div>' +
+      '</div>' +
+    '</div>';
+  });
+  document.getElementById('dashboard-grid').innerHTML = html;
 }
 
 function renderDashboardGrid() {
   var levels = {};
-  systemData.forEach(function (p) {
+  systemData.forEach(function(p) {
     var src = p.source_sheet || '-';
-    if (!levels[src]) levels[src] = { count: 0 };
-    levels[src].count++;
+    if (!levels[src]) levels[src] = 0;
+    levels[src]++;
   });
-  var html = '';
-  ['รายชื่อนักเรียน ม.3', 'รายชื่อนักเรียน ม.4', 'รายชื่อนักเรียน ม.5', 'รายชื่อนักเรียน ม.6'].forEach(function (lv) {
-    var c = (levels[lv] && levels[lv].count) || 0;
-    html += '<div class="col-6 col-md-3"><div class="card level-card shadow-sm" onclick="openLevel(\'' + escapeHtml(lv) + '\')">' +
-      '<div class="level-icon"><i class="fas fa-graduation-cap"></i></div>' +
-      '<h5 class="fw-bold text-primary">' + escapeHtml(lv.replace('รายชื่อนักเรียน ', '')) + '</h5>' +
-      '<small class="text-muted">' + c + ' คน</small></div></div>';
-  });
-  var tc = (levels['รายชื่อครู'] && levels['รายชื่อครู'].count) || 0;
-  html += '<div class="col-6 col-md-3"><div class="card level-card shadow-sm" onclick="openLevel(\'รายชื่อครู\')">' +
-    '<div class="level-icon"><i class="fas fa-chalkboard-teacher"></i></div>' +
-    '<h5 class="fw-bold text-info">ครู</h5><small class="text-muted">' + tc + ' คน</small></div></div>';
-  document.getElementById('dashboard-grid').innerHTML = html;
+  _renderDashboardFromStats(levels);
 }
 
 // ==========================================
-// TABLE VIEW
+// ROOM PICKER — Step 2: เลือกห้อง
 // ==========================================
 
 function openLevel(level) {
   currentLevel = level;
-  var t = document.getElementById('table-title');
-  var b = document.getElementById('table-badge');
-  if (t) t.textContent = 'รายชื่อ - ' + level;
-  if (b) b.textContent = level;
-  showView('view-table');
-  applyTableFilters();
+  // ถ้าเป็นครู → ข้ามหน้าเลือกห้อง ไปที่ตารางโดยตรง
+  if (level === 'รายชื่อครู') {
+    openRoom(level, '');
+    return;
+  }
+  showView('view-room');
+  var lbl = document.getElementById('room-level-label');
+  if (lbl) lbl.textContent = level.replace('รายชื่อนักเรียน ', '');
+  renderRoomPicker(level);
 }
 
-function goBackToDashboard() {
-  showView('view-dashboard');
-  if (_dataLoaded && systemData.length) {
-    renderDashboardGrid();
-  } else {
-    loadDashboard();
+function renderRoomPicker(level) {
+  var grid = document.getElementById('room-picker-grid');
+  if (!grid) return;
+
+  if (!_dataLoaded || !systemData.length) {
+    grid.innerHTML = '<div class="col-12 text-center py-5">' +
+      '<div class="spinner-border text-primary" role="status"></div>' +
+      '<div class="mt-2 text-muted">กำลังโหลดข้อมูล...</div></div>';
+    // รอ data แล้ว re-render
+    if (!_dataLoaded) {
+      var checkInterval = setInterval(function() {
+        if (_dataLoaded) {
+          clearInterval(checkInterval);
+          renderRoomPicker(level);
+        }
+      }, 300);
+    }
+    return;
   }
+
+  // รวบรวมห้องและสถิติ
+  var roomStats = {};
+  systemData.forEach(function(p) {
+    if (p.source_sheet !== level) return;
+    var rm = String(p.room || '-');
+    if (!roomStats[rm]) roomStats[rm] = { total:0, borrowed:0, docPassed:0, notBorrowed:0, returned:0 };
+    roomStats[rm].total++;
+    var s = p.borrowStatus || '';
+    if (s === 'ยืมอยู่' || s === 'อยู่ระหว่างการส่งคืน') roomStats[rm].borrowed++;
+    else if (s === 'คืนแล้ว') roomStats[rm].returned++;
+    else roomStats[rm].notBorrowed++;
+    if ((p.docStatus||'') === 'เอกสารผ่าน') roomStats[rm].docPassed++;
+  });
+
+  var rooms = Object.keys(roomStats).sort(function(a,b) {
+    return String(a).localeCompare(String(b), 'th', {numeric:true});
+  });
+
+  if (!rooms.length) {
+    grid.innerHTML = '<div class="col-12 text-center py-5 text-muted"><i class="fas fa-inbox fa-2x mb-2 d-block"></i>ไม่พบข้อมูลห้องเรียน</div>';
+    return;
+  }
+
+  var html = '';
+  rooms.forEach(function(rm) {
+    var s = roomStats[rm];
+    var pct = s.total ? Math.round((s.borrowed / s.total) * 100) : 0;
+    var retPct = s.total ? Math.round(((s.borrowed + s.returned) / s.total) * 100) : 0;
+
+    // สี progress bar ตาม % ยืม
+    var barColor = pct >= 80 ? '#198754' : pct >= 50 ? '#ffc107' : '#dee2e6';
+
+    html +=
+      '<div class="col-6 col-md-4 col-lg-3">' +
+        '<div class="room-card" onclick="openRoom(\'' + escapeHtml(level) + '\',\'' + escapeHtml(rm) + '\')">' +
+          '<div class="room-card-header">' +
+            '<div class="room-card-number">ห้อง ' + escapeHtml(rm) + '</div>' +
+            '<div class="room-card-total">' + s.total + ' คน</div>' +
+          '</div>' +
+          '<div class="room-card-progress">' +
+            '<div class="room-card-progress-bar" style="width:' + pct + '%;background:' + barColor + ';"></div>' +
+          '</div>' +
+          '<div class="room-card-stats">' +
+            '<div class="rcs-item rcs-borrow">' +
+              '<i class="fas fa-tablet-alt"></i>' +
+              '<span>' + s.borrowed + '</span>' +
+              '<small>ยืม</small>' +
+            '</div>' +
+            '<div class="rcs-item rcs-notborrow">' +
+              '<i class="fas fa-clock"></i>' +
+              '<span>' + s.notBorrowed + '</span>' +
+              '<small>ยังไม่ยืม</small>' +
+            '</div>' +
+            '<div class="rcs-item rcs-doc">' +
+              '<i class="fas fa-file-check"></i>' +
+              '<span>' + s.docPassed + '</span>' +
+              '<small>เอกสารผ่าน</small>' +
+            '</div>' +
+          '</div>' +
+          '<div class="room-card-pct">' + pct + '% ยืมแล้ว</div>' +
+        '</div>' +
+      '</div>';
+  });
+
+  grid.innerHTML = html;
+}
+
+// ==========================================
+// TABLE VIEW — Step 3: รายชื่อ
+// ==========================================
+
+function openRoom(level, room) {
+  currentLevel = level;
+  currentRoom  = room;
+
+  // อัป breadcrumb
+  var bLevel = document.getElementById('breadcrumb-level-text');
+  var bRoom  = document.getElementById('breadcrumb-room-text');
+  var bSep   = document.getElementById('breadcrumb-room-sep');
+  var bLvlBtn = document.getElementById('breadcrumb-level-btn');
+
+  var levelShort = level.replace('รายชื่อนักเรียน ', '');
+  if (bLevel) bLevel.textContent = levelShort;
+  if (bRoom)  bRoom.textContent  = room ? 'ห้อง ' + room : 'ทั้งหมด';
+  if (bSep)   bSep.style.display = room ? '' : 'none';
+
+  // Title
+  var t = document.getElementById('table-title');
+  var b = document.getElementById('table-badge');
+  if (t) t.textContent = level === 'รายชื่อครู' ? 'รายชื่อครู' : levelShort + (room ? ' ห้อง ' + room : '');
+  if (b) b.textContent = level === 'รายชื่อครู' ? 'บุคลากร' : (room ? 'ห้อง ' + room : 'ทุกห้อง');
+
+  // ซ่อน breadcrumb ปุ่ม level ถ้าเป็นครู
+  if (bLvlBtn) bLvlBtn.style.display = (level === 'รายชื่อครู') ? 'none' : '';
+
+  showView('view-table');
+
+  // Reset filters
+  var sf = document.getElementById('statusFilter');
+  var df = document.getElementById('docFilter');
+  if (sf) sf.value = '';
+  if (df) df.value = '';
+  _tableSearchQuery = '';
+  var si = document.getElementById('tableSearchInput');
+  if (si) si.value = '';
+
+  if (_dataLoaded && systemData.length) {
+    applyTableFilters();
+  } else {
+    // แสดง skeleton ก่อน
+    var container = document.getElementById('table-list-container');
+    if (container) container.innerHTML = _skeletonHTML();
+    _loadSystemDataWithRetry(0, function() {
+      applyTableFilters();
+    }, function(err) {
+      showError(err);
+    });
+  }
+}
+
+function _skeletonHTML() {
+  var html = '';
+  for (var i = 0; i < 6; i++) {
+    html += '<div class="skeleton-card"><div class="skeleton-line w-60"></div><div class="skeleton-line w-40 mt-1"></div><div class="skeleton-line w-80 mt-2"></div></div>';
+  }
+  return '<div class="skeleton-grid">' + html + '</div>';
 }
 
 function onTableSearch(val) {
@@ -293,32 +543,18 @@ function clearTableSearch() {
   applyTableFilters();
 }
 
-function getFilteredTableRows(roomV, statusV, docV, returnDocV) {
-  // ถ้าไม่ได้ส่งมา ให้อ่านจาก DOM (backward-compat)
-  if (roomV   === undefined) roomV   = (document.getElementById('roomFilter')   || {}).value || '';
+function getFilteredTableRows(statusV, docV) {
   if (statusV === undefined) statusV = (document.getElementById('statusFilter') || {}).value || '';
   if (docV    === undefined) docV    = (document.getElementById('docFilter')    || {}).value || '';
-  
-  // เพิ่มการรับค่าตัวกรอง สถานะเอกสารการคืน (ถ้ามี dropdown id="returnDocFilter")
-  if (returnDocV === undefined) returnDocV = (document.getElementById('returnDocFilter') || {}).value || '';
-  
+
   var q = _tableSearchQuery;
 
-  var rows = systemData.filter(function (p) {
+  var rows = systemData.filter(function(p) {
     if ((p.source_sheet || '') !== currentLevel) return false;
-    
-    // แก้ปัญหาที่ 1: เลือกห้องแล้วไม่แสดง (แปลงเป็น String ก่อนเปรียบเทียบค่า)
-    if (roomV   && String(p.room || '') !== String(roomV)) return false;
-    
-    // แปลงสถานะอื่นเป็น String ด้วยเพื่อความปลอดภัยป้องกันบั๊ก
+    // กรองห้อง (จาก currentRoom ที่เลือกในหน้า room picker)
+    if (currentRoom && String(p.room || '') !== String(currentRoom)) return false;
     if (statusV && String(p.borrowStatus || '') !== String(statusV)) return false;
-    
-    // กรองสถานะเอกสารยืม
     if (docV    && String(p.docStatus || 'ยังไม่ส่ง') !== String(docV)) return false;
-    
-    // แก้ปัญหาที่ 2: กรองสถานะเอกสารคืน (ถ้ามีการเลือกกรอง)
-    if (returnDocV && String(p.returnDocStatus || 'ยังไม่ส่ง') !== String(returnDocV)) return false;
-
     if (q) {
       var hit = String(p.name||'').toLowerCase().indexOf(q) >= 0
              || String(p.id||'').toLowerCase().indexOf(q) >= 0
@@ -327,85 +563,58 @@ function getFilteredTableRows(roomV, statusV, docV, returnDocV) {
     }
     return true;
   });
-  
-  rows.sort(function (a, b) { 
-    return String(a.room||'').localeCompare(String(b.room||'')) || String(a.name||'').localeCompare(String(b.name||''), 'th'); 
+
+  rows.sort(function(a, b) {
+    return String(a.no||'').localeCompare(String(b.no||''), 'th', {numeric:true})
+        || String(a.name||'').localeCompare(String(b.name||''), 'th');
   });
-  
+
   return rows;
 }
 
 function applyTableFilters() {
-  var sel = document.getElementById('roomFilter');
-
-  // ✅ FIX: อ่านค่า filter ก่อนสร้าง dropdown ใหม่ ป้องกัน value reset
-  var roomV   = sel ? sel.value : '';
   var statusV = (document.getElementById('statusFilter') || {}).value || '';
   var docV    = (document.getElementById('docFilter')    || {}).value || '';
-
-  // Populate room dropdown (rebuild แล้วคืนค่าที่เลือกไว้)
-  if (sel) {
-    var rooms = [], seen = {};
-    systemData.filter(function (p) { return (p.source_sheet || '') === currentLevel; }).forEach(function (r) {
-      var rn = r.room || '-';
-      if (!seen[rn]) { seen[rn] = 1; rooms.push(rn); }
-    });
-    sel.innerHTML = '<option value="">🏫 ทุกห้อง</option>' + rooms.sort().map(function (r) {
-      return '<option value="' + escapeHtml(r) + '">ห้อง ' + escapeHtml(r) + '</option>';
-    }).join('');
-    if (roomV) sel.value = roomV; // คืนค่าที่เลือกไว้
-  }
-
-  // ✅ ส่งค่าที่อ่านไว้ล่วงหน้าเข้าฟังก์ชัน แทนอ่านซ้ำจาก DOM
-  var rows = getFilteredTableRows(roomV, statusV, docV);
+  var rows = getFilteredTableRows(statusV, docV);
   var countEl = document.getElementById('filteredCountText');
   if (countEl) countEl.textContent = rows.length;
   _renderMiniStats(rows);
   renderTable(rows);
 }
 
-// ─── mini stat cards (ปรับปรุง) ─────────────────────────────────
+// ─── mini stat cards ──────────────────────────────────────────
 function _renderMiniStats(rows) {
-  var b=0, nb=0, ret=0, pd=0, returning=0;
+  var b=0, nb=0, ret=0, pd=0, returning=0, repair=0;
   rows.forEach(function(p){
     var s = p.borrowStatus || '';
     if (s === 'ยืมอยู่') b++;
     else if (s === 'อยู่ระหว่างการส่งคืน') { b++; returning++; }
     else if (s === 'ยังไม่ยืม') nb++;
     else if (s === 'คืนแล้ว') ret++;
+    else if (s === 'ส่งซ่อม' || s === 'สละสิทธิ์') repair++;
     if ((p.docStatus||'')==='รอตรวจสอบ' || (p.returnDocStatus||'')==='รอตรวจสอบ') pd++;
   });
   var total = rows.length || 1;
-  var borrowPct = Math.round((b / total) * 100);
 
   var el = document.getElementById('table-mini-stats');
   if (!el) return;
 
   var cards = [
-    { icon:'fas fa-tablet-alt', label:'ยืมอยู่',  val:b,         color:'#1e7e34', bg:'#d4edda', border:'#28a745', pct: borrowPct },
-    { icon:'fas fa-clock',      label:'รอคืน',    val:returning,  color:'#856404', bg:'#fff3cd', border:'#ffc107', pct: null },
-    { icon:'fas fa-check-circle',label:'คืนแล้ว', val:ret,        color:'#004085', bg:'#cce5ff', border:'#0d6efd', pct: null },
-    { icon:'fas fa-file-circle-exclamation', label:'รอเอกสาร', val:pd, color:'#721c24', bg:'#f8d7da', border:'#dc3545', pct: null }
+    { icon:'fas fa-tablet-alt',   label:'ยืมอยู่',   val:b,          c:'#198754', bg:'#d1e7dd', br:'#198754' },
+    { icon:'fas fa-box-open',     label:'ยังไม่ยืม', val:nb,         c:'#495057', bg:'#e9ecef', br:'#adb5bd' },
+    { icon:'fas fa-check-circle', label:'คืนแล้ว',   val:ret,        c:'#0a58ca', bg:'#cfe2ff', br:'#0d6efd' },
+    { icon:'fas fa-file-circle-question', label:'รอเอกสาร', val:pd,  c:'#842029', bg:'#f8d7da', br:'#dc3545' }
   ];
 
   el.innerHTML = cards.map(function(c) {
-    var pctHtml = c.pct !== null
-      ? '<div class="progress mt-1" style="height:3px;background:rgba(0,0,0,.1);border-radius:999px;">' +
-          '<div class="progress-bar" style="width:'+c.pct+'%;background:'+c.border+';border-radius:999px;"></div>' +
-        '</div>'
-      : '';
-    var pctLabel = c.pct !== null
-      ? '<span style="font-size:.58rem;opacity:.7;margin-left:2px;">'+c.pct+'%</span>'
-      : '';
+    var pct = Math.round((c.val / total) * 100);
     return '<div class="col-3">' +
-      '<div class="mini-stat-tile h-100" style="background:'+c.bg+';border-top:3px solid '+c.border+';">' +
-        '<i class="'+c.icon+' d-block mb-1" style="font-size:.82rem;color:'+c.color+';opacity:.8;"></i>' +
-        '<div class="fw-bold d-flex align-items-baseline justify-content-center" style="font-size:1.15rem;color:'+c.color+';gap:2px;">' +
-          c.val + pctLabel +
-        '</div>' +
-        '<div class="fw-bold" style="font-size:.63rem;color:'+c.color+';opacity:.75;letter-spacing:.3px;line-height:1.2;">'+c.label+'</div>' +
-        pctHtml +
-      '</div></div>';
+      '<div class="mst-card" style="border-top:3px solid ' + c.br + ';background:' + c.bg + ';">' +
+        '<div class="mst-val" style="color:' + c.c + ';">' + c.val + '</div>' +
+        '<div class="mst-lbl" style="color:' + c.c + ';">' + c.label + '</div>' +
+        '<div class="mst-pct" style="color:' + c.c + ';">' + pct + '%</div>' +
+      '</div>' +
+    '</div>';
   }).join('');
 }
 
@@ -457,179 +666,116 @@ function _docConf(status) {
   return map[status] || { bg:'#f8f9fa', color:'#adb5bd', icon:'📋' };
 }
 
-// ─── renderTable (ปรับปรุงใหม่ทั้งหมด) ──────────────────────────
+// ─── renderTable — ใหม่: แสดงข้อมูลชัดเจนทุก field ─────────────
+var _renderTableRAF = null;
 function renderTable(rows) {
   var container = document.getElementById('table-list-container');
   if (!container) return;
 
   if (!rows.length) {
     container.innerHTML =
-      '<div class="text-center py-5 text-muted">' +
-        '<div style="font-size:3rem;opacity:.2;" class="mb-3">🔍</div>' +
-        '<div class="fw-bold mb-1">ไม่พบรายการที่ตรงกับเงื่อนไข</div>' +
-        '<div class="small">ลองเปลี่ยนตัวกรองหรือล้างการค้นหา</div>' +
+      '<div class="empty-state">' +
+        '<div class="empty-state-icon">🔍</div>' +
+        '<div class="empty-state-title">ไม่พบรายการ</div>' +
+        '<div class="empty-state-sub">ลองปรับตัวกรองหรือล้างการค้นหา</div>' +
       '</div>';
     return;
   }
 
-  // Group by room
-  var grouped = {}, roomOrder = [];
-  rows.forEach(function(r) {
-    var rm = r.room || '-';
-    if (!grouped[rm]) { grouped[rm] = []; roomOrder.push(rm); }
-    grouped[rm].push(r);
-  });
-
   var q = _tableSearchQuery || '';
-  var html = '';
 
-  roomOrder.forEach(function(rm) {
-    var list = grouped[rm];
-    var roomBorrowed = 0, roomRet = 0;
-    list.forEach(function(p) {
-      var s = p.borrowStatus || '';
-      if (s === 'ยืมอยู่' || s === 'อยู่ระหว่างการส่งคืน') roomBorrowed++;
-      if (s === 'คืนแล้ว') roomRet++;
-    });
-    var roomPct = Math.round((roomBorrowed / list.length) * 100) || 0;
+  if (_renderTableRAF) cancelAnimationFrame(_renderTableRAF);
+  _renderTableRAF = requestAnimationFrame(function() {
 
-    html += '<div class="mb-4">';
+    var html = '<div class="sc-grid">';
 
-    // ── Room header ──
-    html +=
-      '<div class="d-flex align-items-center justify-content-between flex-wrap gap-1 mb-1 px-1">' +
-        '<div class="d-flex align-items-center gap-2">' +
-          '<span class="fw-bold" style="color:#1a1a2e;font-size:1rem;">' +
-            '<i class="fas fa-door-open me-1 text-primary" style="font-size:.85rem;"></i>ห้อง ' + escapeHtml(rm) +
-          '</span>' +
-          '<span class="badge rounded-pill" style="background:#e8f0fe;color:#1a73e8;font-size:.72rem;">' + list.length + ' คน</span>' +
-        '</div>' +
-        '<div class="d-flex align-items-center gap-2 small">' +
-          (roomBorrowed ? '<span class="text-success fw-bold"><i class="fas fa-tablet-alt me-1" style="font-size:.75rem;"></i>' + roomBorrowed + ' ยืม</span>' : '') +
-          (roomRet      ? '<span class="text-primary fw-bold"><i class="fas fa-check me-1" style="font-size:.75rem;"></i>' + roomRet + ' คืน</span>' : '') +
-        '</div>' +
-      '</div>' +
-      // progress bar
-      '<div class="room-progress mb-2" title="' + roomPct + '% ยืมแล้ว">' +
-        '<div class="room-progress-bar" style="width:' + roomPct + '%;background:#28a745;"></div>' +
-      '</div>';
-
-    // ── Card grid ──
-    html += '<div class="status-card-grid">';
-
-    list.forEach(function(r, idx) {
+    rows.forEach(function(r, idx) {
       var bs  = r.borrowStatus    || 'ยังไม่ยืม';
       var ds  = r.docStatus       || 'ยังไม่ส่ง';
       var rds = r.returnDocStatus || 'ยังไม่ส่ง';
-      var sn  = r.serial || '';
-      var note = r.note || '';
-      var cardId = 'c_' + escapeHtml(String(r.id)) + '_' + idx;
+      var sn  = (r.serial && r.serial !== '-') ? r.serial : '';
 
       var sc  = _statusConf(bs);
       var dsc = _docConf(ds);
       var rsc = _docConf(rds);
 
-      var hasSerial    = sn && sn !== '-';
-      var hasNote      = !!note;
-      var hasBorrowDoc = !!(r.files && r.files.agreement) || !!(r.docUrl);
-      var hasReturnDoc = !!(r.returnDocUrl);
-      var hasExtra     = hasSerial || hasNote || hasBorrowDoc || hasReturnDoc;
-
-      // highlight
       var dName   = _hlText(escapeHtml(r.name || ''), q);
       var dId     = _hlText(escapeHtml(String(r.id || '')), q);
-      var dSerial = hasSerial ? _hlText(escapeHtml(sn), q) : '';
+      var dSerial = sn ? _hlText(escapeHtml(sn), q) : '';
 
-      // doc flow (แก้ไขให้แสดง 2 สถานะคู่กันเสมอ)
-      var docFlow =
-        '<div class="d-flex align-items-center flex-wrap mb-2" style="gap:6px;">' +
-          '<span style="opacity:.6;font-size:.7rem;">📄 ยืม:</span>' +
-          '<span style="background:' + (dsc.bg || '#eee') + ';color:' + (dsc.color || '#333') + ';font-size:.7rem;font-weight:700;padding:3px 9px;border-radius:20px;">' +
-             (dsc.icon || '') + ' ' + escapeHtml(ds) +
-          '</span>' +
-          '<span style="color:#d0d0d0;font-size:.75rem;margin:0 2px;">|</span>' +
-          '<span style="opacity:.6;font-size:.7rem;">📦 คืน:</span>' +
-          '<span style="background:' + (rsc.bg || '#eee') + ';color:' + (rsc.color || '#333') + ';font-size:.7rem;font-weight:700;padding:3px 9px;border-radius:20px;">' +
-             (rsc.icon || '') + ' ' + escapeHtml(rds) +
-          '</span>' +
-        '</div>';
+      var hasBorrowDoc = !!(r.files && r.files.agreement) || !!(r.docUrl);
+      var hasReturnDoc = !!(r.returnDocUrl);
 
-      // expand content
-      var expandHtml = '';
-      if (hasExtra) {
-        var docLinks = '';
-        if (hasBorrowDoc) {
-          var bUrl = (r.files && r.files.agreement) ? r.files.agreement : (r.docUrl || '');
-          if (bUrl) docLinks += '<a href="' + escapeHtml(bUrl) + '" target="_blank" class="doc-link-pill" style="background:#d4edda;color:#1e7e34;border:1px solid #c3e6cb;padding:3px 8px;border-radius:15px;text-decoration:none;font-size:.75rem;">' +
-            '<i class="fas fa-file-pdf" style="font-size:.7rem;"></i> เอกสารยืม</a>';
-        }
-        if (hasReturnDoc) {
-          docLinks += '<a href="' + escapeHtml(r.returnDocUrl) + '" target="_blank" class="doc-link-pill" style="background:#cce5ff;color:#004085;border:1px solid #b8daff;padding:3px 8px;border-radius:15px;text-decoration:none;font-size:.75rem;">' +
-            '<i class="fas fa-file-pdf" style="font-size:.7rem;"></i> เอกสารคืน</a>';
-        }
-
-        expandHtml =
-          '<div class="status-card-extra mt-2 pt-2" id="extra_' + cardId + '" style="border-top:1px dashed #eee;">' +
-            (hasSerial
-              ? '<div class="mb-1"><i class="fas fa-barcode me-1 text-muted"></i><span class="text-muted">Serial:</span> ' +
-                '<code style="background:#f4f4f4;padding:2px 7px;border-radius:5px;color:#444;font-size:.76rem;">' + dSerial + '</code></div>'
-              : '') +
-            (hasNote
-              ? '<div class="mb-1 text-muted"><i class="fas fa-sticky-note me-1" style="opacity:.6;"></i>' + escapeHtml(note) + '</div>'
-              : '') +
-            (docLinks
-              ? '<div class="d-flex flex-wrap gap-2 mt-2">' + docLinks + '</div>'
-              : '') +
-          '</div>';
+      // ── Doc links ──
+      var docLinksHtml = '';
+      if (hasBorrowDoc) {
+        var bUrl = (r.files && r.files.agreement) ? r.files.agreement : (r.docUrl || '');
+        docLinksHtml += '<a href="' + escapeHtml(bUrl) + '" target="_blank" class="doc-pill doc-pill-borrow">' +
+          '<i class="fas fa-file-pdf"></i> ดูเอกสารยืม</a>';
+      }
+      if (hasReturnDoc) {
+        docLinksHtml += '<a href="' + escapeHtml(r.returnDocUrl) + '" target="_blank" class="doc-pill doc-pill-return">' +
+          '<i class="fas fa-file-pdf"></i> ดูเอกสารคืน</a>';
       }
 
       html +=
-        '<div class="status-card" style="border-left:4px solid ' + (sc.border || '#ccc') + ';">' +
-          '<div class="p-3">' +
+        '<div class="sc-card" style="--status-color:' + sc.border + ';animation-delay:' + Math.min(idx * 0.03, 0.3) + 's">' +
 
-            // Row 1: Name + badge
-            '<div class="d-flex align-items-start justify-content-between gap-2 mb-1">' +
-              '<div class="fw-bold text-truncate" style="font-size:.93rem;color:#1a1a2e;flex:1;min-width:0;line-height:1.3;">' +
-                '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + (sc.border || '#ccc') + ';margin-right:7px;flex-shrink:0;vertical-align:middle;"></span>' +
-                dName +
-              '</div>' +
-              '<span style="background:' + (sc.bg || '#eee') + ';color:' + (sc.color || '#333') + ';font-size:.72rem;font-weight:700;padding:4px 10px;border-radius:20px;white-space:nowrap;flex-shrink:0;">' +
-                (sc.icon || '') + ' ' + escapeHtml(bs) +
+          // ── STATUS STRIPE + Name ──
+          '<div class="sc-top" style="background:' + sc.bg + ';border-bottom:2px solid ' + sc.border + ';">' +
+            '<div class="sc-status-badge" style="background:' + sc.border + ';">' +
+              sc.icon + ' ' + escapeHtml(bs) +
+            '</div>' +
+            '<div class="sc-name">' + dName + '</div>' +
+            '<div class="sc-meta">' +
+              '<span class="sc-id"><i class="fas fa-id-card"></i> ' + dId + '</span>' +
+              (r.room ? '<span class="sc-room"><i class="fas fa-door-open"></i> ห้อง ' + escapeHtml(r.room) + '</span>' : '') +
+            '</div>' +
+          '</div>' +
+
+          // ── BODY ──
+          '<div class="sc-body">' +
+
+            // Serial
+            '<div class="sc-field">' +
+              '<span class="sc-field-label"><i class="fas fa-barcode"></i> Serial</span>' +
+              '<span class="sc-field-val sc-serial">' + (dSerial || '<span class="text-muted">—</span>') + '</span>' +
+            '</div>' +
+
+            // เอกสารยืม
+            '<div class="sc-field">' +
+              '<span class="sc-field-label"><i class="fas fa-file-alt"></i> เอกสารยืม</span>' +
+              '<span class="sc-doc-badge" style="background:' + dsc.bg + ';color:' + dsc.color + ';">' +
+                dsc.icon + ' ' + escapeHtml(ds) +
               '</span>' +
             '</div>' +
 
-            // Row 2: ID + room
-            '<div class="text-muted mb-2" style="font-size:.78rem;padding-left:15px;">' +
-              '<i class="fas fa-id-card me-1" style="opacity:.4;"></i>' + dId +
-              (r.room ? '&nbsp;<span style="opacity:.35;margin:0 3px;">|</span><i class="fas fa-door-open me-1" style="opacity:.4;"></i>ห้อง ' + escapeHtml(r.room) : '') +
+            // เอกสารคืน
+            '<div class="sc-field">' +
+              '<span class="sc-field-label"><i class="fas fa-undo"></i> เอกสารคืน</span>' +
+              '<span class="sc-doc-badge" style="background:' + rsc.bg + ';color:' + rsc.color + ';">' +
+                rsc.icon + ' ' + escapeHtml(rds) +
+              '</span>' +
             '</div>' +
 
-            // Row 3: Doc flow
-            docFlow +
-
-            // Row 4: Actions
-            '<div class="d-flex align-items-center justify-content-between mt-1">' +
-              (hasExtra
-                ? '<button class="expand-toggle-btn" onclick="_toggleCardExtra(\'' + cardId + '\')">' +
-                    '<i class="fas fa-chevron-down expand-chevron me-1" id="chev_' + cardId + '"></i>' +
-                    '<span id="elbl_' + cardId + '">รายละเอียด</span>' +
-                  '</button>'
-                : '<span></span>') +
-              '<button class="card-upload-btn" onclick="openActionModal(\'' + escapeHtml(String(r.id)) + '\',\'' + escapeHtml(r.source_sheet||'') + '\')">' +
-                '<i class="fas fa-cloud-upload-alt me-1"></i>เอกสาร' +
-              '</button>' +
-            '</div>' +
-
-            expandHtml +
+            // ปุ่ม PDF ถ้ามี
+            (docLinksHtml ? '<div class="sc-doc-links">' + docLinksHtml + '</div>' : '') +
 
           '</div>' +
+
+          // ── FOOTER: ปุ่มอัปโหลด ──
+          '<div class="sc-footer">' +
+            '<button class="sc-upload-btn" onclick="openActionModal(\'' + escapeHtml(String(r.id)) + '\',\'' + escapeHtml(r.source_sheet||'') + '\')">' +
+              '<i class="fas fa-cloud-upload-alt"></i> อัปโหลดเอกสาร' +
+            '</button>' +
+          '</div>' +
+
         '</div>';
     });
 
-    html += '</div></div>'; // close grid + room
+    html += '</div>';
+    container.innerHTML = html;
   });
-
-  container.innerHTML = html;
 }
 
 // ==========================================
@@ -639,6 +785,16 @@ function renderTable(rows) {
 function showUploadDocModal(type) {
   var form = document.getElementById('uploadDocForm');
   if (form) form.reset();
+  var ptStudent = document.getElementById('ud_pt_student');
+  if (ptStudent) ptStudent.checked = true;
+  var lvl = document.getElementById('ud_levelSelect');
+  if (lvl) lvl.value = '';
+  var roomSec = document.getElementById('ud_roomSection');
+  var roomSel = document.getElementById('ud_roomSelect');
+  if (roomSec) roomSec.style.display = 'none';
+  if (roomSel) roomSel.innerHTML = '<option value="">— ทุกห้อง —</option>';
+  var lvlSec = document.getElementById('ud_levelSection');
+  if (lvlSec) lvlSec.style.display = '';
   var search = document.getElementById('ud_searchName');
   if (search) search.value = '';
   if (type) {
@@ -652,31 +808,74 @@ function showUploadDocModal(type) {
     uploadDocPersonList = systemData;
     filterUploadPersonList();
   } else {
-    document.getElementById('ud_personSelect').innerHTML = '<option value="">-- กำลังโหลดรายชื่อ... --</option>';
-    google.script.run
-      .withSuccessHandler(function (data) {
-        uploadDocPersonList = data || [];
-        systemData  = data || [];
-        _dataLoaded = true;
-        filterUploadPersonList();
-      })
-      .withFailureHandler(function (err) {
-        document.getElementById('ud_personSelect').innerHTML = '<option value="">-- โหลดไม่สำเร็จ --</option>';
-        showError(err);
-      })
-      .getAllSystemData();
+    document.getElementById('ud_personSelect').innerHTML = '<option value="">— กำลังโหลดรายชื่อ... —</option>';
+    _loadSystemDataWithRetry(0, function() {
+      uploadDocPersonList = systemData;
+      filterUploadPersonList();
+    }, function(err) {
+      document.getElementById('ud_personSelect').innerHTML = '<option value="">— โหลดไม่สำเร็จ —</option>';
+      showError(err);
+    });
   }
 }
 
-function filterUploadPersonList() {
-  var q   = ((document.getElementById('ud_searchName') || {}).value || '').toLowerCase().trim();
-  var sel = document.getElementById('ud_personSelect');
-  if (!sel) return;
-  var filtered = (uploadDocPersonList || []).filter(function (p) {
-    return !q || (p.name || '').toLowerCase().indexOf(q) >= 0 || String(p.id || '').toLowerCase().indexOf(q) >= 0;
+function onUploadPersonTypeChange() {
+  var isStudent = document.getElementById('ud_pt_student').checked;
+  var lvlSec = document.getElementById('ud_levelSection');
+  var roomSec = document.getElementById('ud_roomSection');
+  if (lvlSec) lvlSec.style.display = isStudent ? '' : 'none';
+  if (roomSec) roomSec.style.display = 'none';
+  var lvl = document.getElementById('ud_levelSelect');
+  if (lvl) lvl.value = '';
+  var roomSel = document.getElementById('ud_roomSelect');
+  if (roomSel) roomSel.innerHTML = '<option value="">— ทุกห้อง —</option>';
+  var search = document.getElementById('ud_searchName');
+  if (search) search.value = '';
+  filterUploadPersonList();
+}
+
+function onUploadLevelChange() {
+  var lvl = (document.getElementById('ud_levelSelect') || {}).value || '';
+  var roomSec = document.getElementById('ud_roomSection');
+  var roomSel = document.getElementById('ud_roomSelect');
+  if (!lvl) {
+    if (roomSec) roomSec.style.display = 'none';
+    if (roomSel) roomSel.innerHTML = '<option value="">— ทุกห้อง —</option>';
+    filterUploadPersonList();
+    return;
+  }
+  var rooms = [];
+  (uploadDocPersonList || []).forEach(function(p) {
+    if (p.source_sheet === lvl && p.room && rooms.indexOf(p.room) < 0) rooms.push(p.room);
   });
-  sel.innerHTML = '<option value="">-- เลือกชื่อ (' + filtered.length + ' รายการ) --</option>' +
-    filtered.map(function (p) {
+  rooms.sort(function(a,b) { return String(a).localeCompare(String(b),'th',{numeric:true}); });
+  if (roomSel) {
+    roomSel.innerHTML = '<option value="">— ทุกห้อง —</option>' +
+      rooms.map(function(r) { return '<option value="' + escapeHtml(r) + '">ห้อง ' + escapeHtml(r) + '</option>'; }).join('');
+  }
+  if (roomSec) roomSec.style.display = rooms.length ? '' : 'none';
+  filterUploadPersonList();
+}
+
+function filterUploadPersonList() {
+  var q         = ((document.getElementById('ud_searchName') || {}).value || '').toLowerCase().trim();
+  var isStudent = document.getElementById('ud_pt_student') ? document.getElementById('ud_pt_student').checked : true;
+  var lvl       = isStudent ? ((document.getElementById('ud_levelSelect') || {}).value || '') : '';
+  var room      = isStudent ? ((document.getElementById('ud_roomSelect') || {}).value || '') : '';
+  var sel       = document.getElementById('ud_personSelect');
+  if (!sel) return;
+
+  var filtered = (uploadDocPersonList || []).filter(function(p) {
+    if (isStudent  && p.type !== 'student') return false;
+    if (!isStudent && p.type !== 'teacher') return false;
+    if (lvl  && p.source_sheet !== lvl) return false;
+    if (room && String(p.room || '') !== String(room)) return false;
+    if (q && (p.name || '').toLowerCase().indexOf(q) < 0 && String(p.id || '').toLowerCase().indexOf(q) < 0) return false;
+    return true;
+  });
+
+  sel.innerHTML = '<option value="">— เลือกชื่อ (' + filtered.length + ' รายการ) —</option>' +
+    filtered.map(function(p) {
       return '<option value="' + escapeHtml(p.id) + '|' + escapeHtml(p.source_sheet || '') + '">' +
         escapeHtml(p.name) + (p.type === 'teacher' ? ' (ครู)' : ' ห้อง ' + escapeHtml(p.room || '')) + '</option>';
     }).join('');
@@ -818,18 +1017,13 @@ function exitAdmin() { currentUser = null; goLanding(); }
 
 function loadAdminView() {
   showGlobalLoading('กำลังโหลดรายชื่อทั้งหมด...');
-  google.script.run
-    .withSuccessHandler(function (data) {
-      systemData  = data || [];
-      _dataLoaded = true;
-      updateAdminUIForRole();
-      updateAdminStats();
-      _updateModeButtonCounts();
-      filterAdminTable();
-      hideGlobalLoading();
-    })
-    .withFailureHandler(function (err) { hideGlobalLoading(); showError(err); })
-    .getAllSystemData();
+  _loadSystemDataWithRetry(0, function() {
+    updateAdminUIForRole();
+    updateAdminStats();
+    _updateModeButtonCounts();
+    filterAdminTable();
+    hideGlobalLoading();
+  }, function(err) { hideGlobalLoading(); showError(err); });
 }
 
 function updateAdminUIForRole() {
