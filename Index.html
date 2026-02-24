@@ -3,7 +3,7 @@
 <head>
   <base target="_top">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-  <title>ระบบตรวจสอบสถานะ iPad โรงเรียนอรัญประเทศ</title>
+  <title>ระบบจัดเก็บเอกสารการยืม-คืน ไอแพด โรงเรียนอรัญประเทศ</title>
   
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
   <link href="https://cdn.datatables.net/1.13.4/css/dataTables.bootstrap5.min.css" rel="stylesheet">
@@ -29,7 +29,22 @@
       display: inline-block; max-width: 120px;
       overflow: hidden; text-overflow: ellipsis;
       white-space: nowrap; vertical-align: middle;
+      cursor: pointer; transition: background 0.15s;
     }
+    .serial-code:hover { background: #e0e0e0; }
+    .activity-item {
+      border-left: 3px solid #dee2e6; padding: 8px 12px;
+      margin: 0; border-bottom: 1px solid #f3f3f3;
+      transition: background 0.1s;
+    }
+    .activity-item:hover { background: #f8f9fa; }
+    .activity-item .act-name { font-weight: 600; font-size: .9rem; }
+    .activity-item .act-time { font-size: .72rem; color: #6c757d; }
+    .activity-item .act-status { font-size: .78rem; }
+    .activity-item.act-return { border-left-color: #ffc107; }
+    .activity-item.act-approve { border-left-color: #198754; }
+    .activity-item.act-admin { border-left-color: #dc3545; }
+    .activity-item.act-upload { border-left-color: #0d6efd; }
     #adminTable tr.table-warning { background: rgba(255,193,7,0.12) !important; }
     #adminTable tr.table-info    { background: rgba(13,202,240,0.10) !important; }
     #adminTable td { padding: 8px 8px; }
@@ -49,8 +64,8 @@
 
   <script>
   const manifest = {
-    "name": "ระบบตรวจสอบสถานะ iPad",
-    "short_name": "เช็ค iPad",
+    "name": "ระบบจัดเก็บเอกสารการยืม-คืน ไอแพด",
+    "short_name": "ยืม-คืน iPad",
     "start_url": "https://script.google.com/a/macros/aran.ac.th/s/AKfycbxYmFOUQqvoaicHNwGzhSatzwwEu4IF_uJhb4s0rcjOpSQFYEwv1HKqAn_vKoFDRuDT/exec",
     "display": "standalone",
     "background_color": "#ffffff",
@@ -82,7 +97,7 @@
       <div class="mb-3">
         <img src="https://drive.google.com/thumbnail?id=1F9KWlzgtqzsWPfotOgNGsQ0cfPX2ahwX&sz=w400" class="landing-logo" alt="Logo โรงเรียนอรัญประเทศ" style="max-width:130px;height:auto;filter:drop-shadow(0 4px 4px rgba(0,0,0,0.1));">
       </div>
-      <h4 class="fw-bold mb-1 text-dark">ระบบตรวจสอบ iPad</h4>
+      <h4 class="fw-bold mb-1 text-dark">ระบบจัดเก็บเอกสารการยืม-คืน ไอแพด</h4>
       <p class="mb-4 text-muted small">โรงเรียนอรัญประเทศ</p>
       <button onclick="btnClick(this, enterSystem)" class="btn btn-primary btn-lg rounded-pill px-4 fw-bold shadow w-100 mb-3" style="max-width:320px;">
         <i class="fas fa-search me-2"></i> ตรวจสอบสถานะ
@@ -101,8 +116,8 @@
     <div class="container-fluid px-2 px-md-3">
       <a class="navbar-brand fw-bold d-flex align-items-center" href="javascript:void(0)" onclick="goHome(); return false;">
         <img src="https://drive.google.com/thumbnail?id=1F9KWlzgtqzsWPfotOgNGsQ0cfPX2ahwX&sz=w200" class="navbar-logo" alt="Logo" style="height:40px;width:auto;margin-right:10px;">
-        <span class="d-none d-sm-inline">ระบบ iPad รร.อรัญประเทศ</span>
-        <span class="d-inline d-sm-none">ระบบ iPad อรัญฯ</span>
+        <span class="d-none d-sm-inline">ระบบยืม-คืน ไอแพด รร.อรัญประเทศ</span>
+        <span class="d-inline d-sm-none">ยืม-คืน iPad อรัญฯ</span>
       </a>
       <div>
         <button class="btn btn-sm btn-light rounded-circle shadow-sm me-1 text-primary" onclick="goHome()"><i class="fas fa-home"></i></button>
@@ -244,7 +259,10 @@
           <button id="btn-audit-missing" class="btn btn-warning btn-sm rounded-pill fw-bold text-dark" onclick="openMissingAudit()">
             <i class="fas fa-exclamation-triangle me-1"></i><span class="mode-btn-text"> ตรวจสอบตกหล่น</span>
           </button>
-          <button id="btn-refresh" class="btn btn-info btn-sm rounded-pill text-white" onclick="refreshSystemData()">
+          <button id="btn-activity" class="btn btn-info btn-sm rounded-pill text-white" onclick="openActivityLog()" title="ประวัติกิจกรรม">
+            <i class="fas fa-history me-1"></i><span class="mode-btn-text"> ประวัติ</span>
+          </button>
+          <button id="btn-refresh" class="btn btn-outline-info btn-sm rounded-pill" onclick="refreshSystemData()">
             <i class="fas fa-sync-alt me-1"></i><span class="mode-btn-text"> อัปเดต</span>
           </button>
           <button id="btn-export" class="btn btn-success btn-sm rounded-pill" onclick="openExportModal()">
@@ -270,6 +288,7 @@
         <div class="col"><div class="stat-card-admin border-start border-3 border-info"><h4 class="fw-bold text-info" id="stat-pending">0</h4><small>รอตรวจ</small></div></div>
         <div class="col d-none d-md-block"><div class="stat-card-admin border-start border-3 border-success"><h4 class="fw-bold text-success" id="stat-returned">0</h4><small>คืนแล้ว</small></div></div>
         <div class="col d-none d-md-block"><div class="stat-card-admin border-start border-3 border-danger"><h4 class="fw-bold text-danger" id="stat-repair">0</h4><small>ซ่อม/สละ</small></div></div>
+        <div class="col d-none d-md-block" id="stat-inv-col"><div class="stat-card-admin border-start border-3 border-warning"><h4 class="fw-bold text-warning" id="stat-inventory">—</h4><small>iPad ว่าง</small></div></div>
       </div>
 
       <!-- Mode Buttons -->
@@ -521,8 +540,20 @@
             <div class="bg-white p-3 rounded-3 shadow-sm mb-3 text-center">
               <h5 id="m_displayName" class="fw-bold mb-1 text-dark">...</h5>
               <div class="mt-2">
-                <label class="small text-muted mb-1">Serial Number</label>
-                <input type="text" class="form-control text-center fw-bold text-primary" name="userSerial" id="m_userSerial_input" readonly style="background:#f8f9fa;">
+                <label class="small text-muted mb-1 d-flex align-items-center justify-content-center gap-1">
+                  <i class="fas fa-barcode"></i> Serial Number iPad
+                  <span class="badge bg-warning text-dark ms-1" style="font-size:.65rem;" id="m_serial_hint">10 ตัวอักษร</span>
+                </label>
+                <div class="input-group input-group-sm mx-auto" style="max-width:260px;">
+                  <input type="text" class="form-control text-center fw-bold text-primary font-monospace"
+                         name="userSerial" id="m_userSerial_input"
+                         maxlength="10" autocomplete="off"
+                         placeholder="กรอก Serial 10 ตัว"
+                         style="letter-spacing:.08em; font-size:1rem;"
+                         oninput="updateSerialCounter(this)">
+                  <span class="input-group-text" id="m_serial_counter" style="font-size:.75rem; min-width:42px;">0/10</span>
+                </div>
+                <div id="m_serial_msg" class="small mt-1" style="min-height:1.2em;"></div>
               </div>
               <div class="mt-2 d-flex justify-content-center gap-2">
                 <span id="m_borrow_badge" class="badge bg-secondary">...</span>
@@ -748,7 +779,8 @@
                   <th class="py-3 text-start">ระดับ/ห้อง</th>
                   <th class="py-3">นร.ทั้งหมด</th>
                   <th class="py-3 bg-success bg-opacity-10 text-success"><i class="fas fa-tablet-alt"></i> ยืมสำเร็จ</th>
-                  <th class="py-3 bg-warning bg-opacity-10"><i class="fas fa-file-alt"></i> เอกสารผ่าน</th>
+                  <th class="py-3 bg-warning bg-opacity-10 text-warning"><i class="fas fa-file-alt"></i> เอกสารผ่าน</th>
+                  <th class="py-3 bg-info bg-opacity-10 text-info"><i class="fas fa-file-upload"></i> ส่งเอกสารแล้ว</th>
                   <th class="d-none d-md-table-cell text-muted">ยังไม่ยืม</th>
                   <th class="d-none d-md-table-cell text-primary">คืนแล้ว</th>
                   <th class="d-none d-md-table-cell text-danger">ซ่อม/สละ</th>
@@ -759,7 +791,7 @@
           </div>
         </div>
         <div class="modal-footer border-0">
-          <small class="text-muted me-auto">* % การยืม = (ยืมอยู่ + คืนแล้ว + ส่งซ่อม) / ทั้งหมด</small>
+          <small class="text-muted me-auto">* % การยืม = (ยืมอยู่ + คืนแล้ว + ส่งซ่อม) / ทั้งหมด &nbsp;|&nbsp; <span class="text-info">ส่งเอกสารแล้ว</span> = รอตรวจ + ผ่านแล้ว</small>
           <button type="button" class="btn btn-secondary rounded-pill" data-bs-dismiss="modal">ปิด</button>
         </div>
       </div>
@@ -836,37 +868,58 @@
     <div class="modal fade" id="advisorAddStudentModal" tabindex="-1">
   <div class="modal-dialog modal-dialog-centered">
     <div class="modal-content rounded-4 border-0 shadow">
-      <div class="modal-header border-0" style="background: linear-gradient(135deg,#0d6efd,#6610f2); color:white;">
-        <h6 class="modal-title fw-bold">
-          <i class="fas fa-user-plus me-2"></i>เพิ่มนักเรียนในห้องของฉัน
-        </h6>
+      <div class="modal-header border-0 text-white" style="background: linear-gradient(135deg,#198754,#0d6efd);">
+        <div>
+          <h6 class="modal-title fw-bold mb-0">
+            <i class="fas fa-user-plus me-2"></i>เพิ่มนักเรียนในห้องของฉัน
+          </h6>
+          <small class="opacity-75" id="advisorAdd_sheetLabel">-</small>
+        </div>
         <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
       </div>
-      <div class="modal-body">
+      <div class="modal-body pt-3">
         <input type="hidden" id="advisorAdd_targetSheet">
         <input type="hidden" id="advisorAdd_room">
 
-        <!-- แสดงห้องที่จะเพิ่ม -->
-        <div class="alert alert-info border-0 rounded-3 py-2 mb-3 small">
-          <i class="fas fa-door-open me-1"></i>
-          เพิ่มเข้าชั้น: <strong id="advisorAdd_sheetLabel">-</strong>
+        <!-- รหัสนักเรียน -->
+        <div class="mb-3">
+          <label class="form-label small fw-bold text-dark">
+            <i class="fas fa-id-card text-primary me-1"></i>รหัสนักเรียน <span class="text-danger">*</span>
+          </label>
+          <input type="text" id="advisorAdd_id" class="form-control form-control-lg rounded-3 fw-bold"
+                 placeholder="เช่น 37001, 65001" inputmode="numeric"
+                 onkeydown="if(event.key==='Enter') document.getElementById('advisorAdd_name').focus()">
         </div>
 
+        <!-- ชื่อ-นามสกุล -->
         <div class="mb-3">
-          <label class="form-label small fw-bold">รหัสนักเรียน <span class="text-danger">*</span></label>
-          <input type="text" id="advisorAdd_id" class="form-control rounded-3"
-                 placeholder="เช่น 37001, 65001" inputmode="numeric">
+          <label class="form-label small fw-bold text-dark">
+            <i class="fas fa-user text-success me-1"></i>ชื่อ-นามสกุล <span class="text-danger">*</span>
+          </label>
+          <input type="text" id="advisorAdd_name" class="form-control form-control-lg rounded-3"
+                 placeholder="เช่น นายสมชาย ใจดี"
+                 onkeydown="if(event.key==='Enter') document.getElementById('advisorAdd_serial').focus()">
         </div>
-        <div class="mb-3">
-          <label class="form-label small fw-bold">ชื่อ-นามสกุล <span class="text-danger">*</span></label>
-          <input type="text" id="advisorAdd_name" class="form-control rounded-3"
-                 placeholder="เช่น นายสมชาย ใจดี">
+
+        <!-- Serial Number -->
+        <div class="mb-2">
+          <label class="form-label small fw-bold text-dark">
+            <i class="fas fa-barcode text-secondary me-1"></i>Serial Number iPad
+            <span class="badge bg-light text-secondary border ms-1" style="font-size:.7rem;font-weight:400;">ไม่บังคับ</span>
+          </label>
+          <input type="text" id="advisorAdd_serial" class="form-control rounded-3 font-monospace"
+                 placeholder="เช่น DMPHCXXQ5XQ2 หรือเว้นว่างหากยังไม่ทราบ"
+                 style="font-size:.92rem; letter-spacing:.04em"
+                 onkeydown="if(event.key==='Enter') saveAdvisorAddStudent()">
+          <div class="form-text small text-muted mt-1">
+            <i class="fas fa-info-circle me-1"></i>กรอก Serial เพื่อผูกเครื่องกับนักเรียน (แก้ไขภายหลังได้)
+          </div>
         </div>
       </div>
-      <div class="modal-footer border-0 pt-0">
+      <div class="modal-footer border-0 pt-0 pb-3">
         <button type="button" class="btn btn-light rounded-pill px-4" data-bs-dismiss="modal">ยกเลิก</button>
-        <button type="button" class="btn btn-primary rounded-pill px-4 fw-bold" onclick="saveAdvisorAddStudent()">
-          <i class="fas fa-plus me-1"></i>เพิ่มรายชื่อ
+        <button type="button" class="btn btn-success rounded-pill px-4 fw-bold shadow-sm" onclick="saveAdvisorAddStudent()">
+          <i class="fas fa-user-plus me-1"></i>เพิ่มรายชื่อ
         </button>
       </div>
     </div>
@@ -993,7 +1046,48 @@
     </div>
   </div>
 
-  <!-- ── SCRIPTS ─────────────────────────────────── -->
+  <!-- ═══════════════ ACTIVITY LOG MODAL ══════════════════ -->
+  <div class="modal fade" id="activityLogModal" tabindex="-1">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+      <div class="modal-content rounded-4 border-0 shadow">
+        <div class="modal-header text-white border-0" style="background:linear-gradient(135deg,#0d6efd,#0a58ca);">
+          <h5 class="modal-title fs-6 fw-bold">
+            <i class="fas fa-history me-2"></i>ประวัติกิจกรรมล่าสุด
+          </h5>
+          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body p-0">
+          <!-- filter bar -->
+          <div class="d-flex gap-2 p-2 bg-light border-bottom flex-wrap align-items-center">
+            <input type="text" id="activitySearch" class="form-control form-control-sm border-0 bg-white shadow-sm" style="max-width:220px;" placeholder="🔍 ค้นหาชื่อ/รหัส/สถานะ..." oninput="filterActivityLog(this.value)">
+            <select id="activityActionFilter" class="form-select form-select-sm border-0 bg-white shadow-sm" style="max-width:180px;" onchange="filterActivityLog()">
+              <option value="">ทุกประเภท</option>
+              <option value="USER_RETURN">ส่งคืน (นักเรียน)</option>
+              <option value="ADVISOR_RETURN">ส่งคืน (ครู)</option>
+              <option value="USER_UPDATE">อัปโหลดเอกสาร</option>
+              <option value="ADVISOR_APPROVE">ครูอนุมัติ</option>
+              <option value="ADMIN">แอดมิน</option>
+            </select>
+            <span class="text-muted small ms-auto" id="activityCountText">โหลดอยู่...</span>
+          </div>
+          <!-- list -->
+          <div id="activityLogList" style="min-height:200px;">
+            <div class="text-center py-5 text-muted">
+              <div class="spinner-border spinner-border-sm me-2"></div> กำลังโหลด...
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer border-0 bg-light py-2">
+          <small class="text-muted"><i class="fas fa-info-circle me-1"></i>แสดงผล 60 รายการล่าสุด (อัปเดตทุก 60 วินาที)</small>
+          <button type="button" class="btn btn-sm btn-outline-primary rounded-pill ms-auto" onclick="loadActivityLog()">
+            <i class="fas fa-sync-alt me-1"></i>รีเฟรช
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─── SCRIPTS ─────────────────────────────────── -->
   <script src="https://code.jquery.com/jquery-3.5.1.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
   <script src="https://cdn.datatables.net/1.13.4/js/jquery.dataTables.min.js"></script>
