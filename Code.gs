@@ -28,7 +28,7 @@ const SHEET_NAMES = {
 
 function doGet() {
   return HtmlService.createTemplateFromFile('Index').evaluate()
-    .setTitle('ระบบตรวจสอบสถานะ iPad โรงเรียนอรัญประเทศ')
+    .setTitle('ระบบจัดเก็บเอกสารการยืม-คืน ไอแพด โรงเรียนอรัญประเทศ')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
@@ -737,19 +737,29 @@ function processForm(formObject) {
       if (blob) url_return = folderReturn.createFile(blob).setName(fullName).getUrl();
     }
 
+    const hasAgreement = url_agreement !== "";
+    const hasReturn    = url_return    !== "";
+    const serialVal    = (formObject.userSerial && formObject.userSerial !== '-') ? String(formObject.userSerial).trim() : '';
+
     let statusToSave = formObject.statusSelect || 'ยืมอยู่';
     let action       = "USER_UPDATE";
     let note         = formObject.note || "";
-    if (url_agreement !== "") statusToSave = statusToSave + " | รอตรวจสอบเอกสาร";
-    if (url_return !== "") {
+
+    if (hasAgreement) statusToSave = statusToSave + " | รอตรวจสอบเอกสาร";
+
+    if (hasReturn) {
       statusToSave = "อยู่ระหว่างการส่งคืน";
       action       = "USER_RETURN";
       note        += (note ? "\n" : "") + "[หลักฐานการคืน]: " + url_return;
+    } else if (!hasAgreement && serialVal) {
+      // Serial-only submit (ไม่มีไฟล์) → ระบุว่ายืมแล้ว
+      statusToSave = "ยืมอยู่";
+      action       = "USER_SERIAL_UPDATE";
     }
 
     sheetData.appendRow([
       timestamp, formObject.userId, formObject.userName, formObject.userType,
-      formObject.userRoom, formObject.userSerial, action, note, statusToSave,
+      formObject.userRoom, serialVal || formObject.userSerial || '-', action, note, statusToSave,
       url_agreement, "", "", "", ""
     ]);
     invalidateSystemDataCache();
@@ -934,6 +944,51 @@ function advisorApproveDoc(data) {
   }
 }
 
+function advisorRejectDoc(data) {
+  if (!data || !data.userId || !data.source_sheet) {
+    return { success: false, message: "ข้อมูลไม่ครบถ้วน" };
+  }
+  const ss              = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const sheetLog        = ss.getSheetByName(SHEET_NAMES.DATA_DB);
+  const targetSheetName = data.source_sheet;
+  const targetSheet     = ss.getSheetByName(targetSheetName);
+  
+  if (!targetSheet) return { success: false, message: "ไม่พบแผ่นงาน" };
+  
+  try {
+    const timestamp  = new Date();
+    const editor     = "ครูที่ปรึกษา: " + (data.editorName || "คุณครู");
+    const rejectNote = "[แจ้งแก้ไข] " + (data.note || "เอกสารไม่ผ่านการตรวจสอบ");
+    
+    if (sheetLog) {
+      sheetLog.appendRow([
+        timestamp, data.userId, data.userName || "-", data.userType || "student",
+        data.userRoom || "-", data.userSerial || "-",
+        editor, rejectNote, "เอกสารไม่ผ่าน",
+        "", "", "", "", ""
+      ]);
+    }
+    
+    const sheetValues    = targetSheet.getDataRange().getValues();
+    const isTeacherSheet = targetSheetName === SHEET_NAMES.TEACHERS;
+    
+    for (let i = 1; i < sheetValues.length; i++) {
+      const rowMatches = isTeacherSheet
+        ? ("T-" + String(sheetValues[i][0])) === String(data.userId)
+        : String(sheetValues[i][1]) === String(data.userId);
+      if (rowMatches) {
+        targetSheet.getRange(i + 1, 12).setValue("เอกสารไม่ผ่าน");
+        break;
+      }
+    }
+    
+    invalidateSystemDataCache();
+    return { success: true };
+  } catch (e) {
+    return { success: false, message: "เกิดข้อผิดพลาด: " + e.toString() };
+  }
+}
+
 function adminDeleteUser(data) {
   if (data.editorRole === 'advisor') return { success: false, message: "ครูที่ปรึกษาไม่ได้รับอนุญาตให้ลบข้อมูล" };
   const ss    = SpreadsheetApp.openById(SPREADSHEET_ID);
@@ -1087,18 +1142,20 @@ function getReportData() {
       var key   = level + '|' + room;
 
       if (!byKey[key]) {
-        byKey[key] = { level: level, room: room, total: 0, borrowed: 0, docPassed: 0, notBorrowed: 0, returned: 0, repair: 0 };
+        byKey[key] = { level: level, room: room, total: 0, borrowed: 0, docPassed: 0, docSubmitted: 0, notBorrowed: 0, returned: 0, repair: 0 };
       }
 
       byKey[key].total++;
-      var status = p.borrowStatus || '';
+      var status  = p.borrowStatus || '';
+      var docStat = p.docStatus    || '';
 
       if (status === 'ยืมอยู่' || status === 'อยู่ระหว่างการส่งคืน') byKey[key].borrowed++;
       else if (status === 'ยังไม่ยืม') byKey[key].notBorrowed++;
       else if (status === 'คืนแล้ว') byKey[key].returned++;
       else if (status === 'ส่งซ่อม' || status === 'สละสิทธิ์') byKey[key].repair++;
 
-      if ((p.docStatus || '') === 'เอกสารผ่าน') byKey[key].docPassed++;
+      if (docStat === 'เอกสารผ่าน') { byKey[key].docPassed++; byKey[key].docSubmitted++; }
+      else if (docStat === 'รอตรวจสอบ' || docStat === 'เอกสารไม่ผ่าน') byKey[key].docSubmitted++;
     }
 
     return Object.keys(byKey).map(function(k) { return byKey[k]; }).sort(function(a, b) {
@@ -1190,6 +1247,163 @@ function deleteSyncTrigger() {
     }
   });
   Logger.log('🗑️ Sync Trigger ถูกลบแล้ว');
+}
+
+// ==========================================
+// ✅ ฟังก์ชัน Activity Log (ประวัติการยืม-คืน)
+// ==========================================
+
+/**
+ * ดึงประวัติกิจกรรมล่าสุดจาก DATA_DB (cache 60 วินาที)
+ * @param {number} limit จำนวนแถวที่ต้องการ (default 60)
+ */
+function getActivityLog(limit) {
+  limit = limit || 60;
+  const cache    = CacheService.getScriptCache();
+  const cacheKey = 'activityLog_' + SPREADSHEET_ID + '_' + limit;
+  try {
+    const cached = cache.get(cacheKey);
+    if (cached) return JSON.parse(cached);
+  } catch (_) {}
+
+  try {
+    const ss      = SpreadsheetApp.openById(SPREADSHEET_ID);
+    const sheet   = ss.getSheetByName(SHEET_NAMES.DATA_DB);
+    if (!sheet) return [];
+
+    const lastRow = sheet.getLastRow();
+    if (lastRow < 2) return [];
+
+    // ดึงแค่แถวสุดท้าย limit แถว (reverse order = ใหม่สุดขึ้นก่อน)
+    const startRow = Math.max(2, lastRow - limit + 1);
+    const numRows  = lastRow - startRow + 1;
+    const data     = sheet.getRange(startRow, 1, numRows, 9).getValues();
+
+    const logs = [];
+    for (let i = data.length - 1; i >= 0; i--) {
+      const row = data[i];
+      const ts      = row[0];
+      const id      = row[1] ? String(row[1]) : '';
+      const name    = row[2] ? String(row[2]) : '';
+      const type    = row[3] ? String(row[3]) : '';
+      const room    = row[4] ? String(row[4]) : '';
+      const serial  = row[5] ? String(row[5]) : '';
+      const action  = row[6] ? String(row[6]) : '';
+      const note    = row[7] ? String(row[7]) : '';
+      const status  = row[8] ? String(row[8]) : '';
+      if (!name && !id) continue;
+      logs.push({
+        ts:     ts instanceof Date ? Utilities.formatDate(ts, 'Asia/Bangkok', 'dd/MM/yy HH:mm') : String(ts),
+        id:     id,
+        name:   name,
+        type:   type,
+        room:   room,
+        serial: serial,
+        action: action,
+        note:   note,
+        status: status
+      });
+    }
+
+    try { cache.put(cacheKey, JSON.stringify(logs), 60); } catch (_) {}
+    return logs;
+
+  } catch (e) {
+    Logger.log('getActivityLog error: ' + e.toString());
+    return [];
+  }
+}
+
+/**
+ * จำนวน iPad ที่ว่าง (จากชีต "เครื่องว่าง") พร้อม cache 5 นาที
+ */
+function getInventoryAvailableCount() {
+  const cache    = CacheService.getScriptCache();
+  const cacheKey = 'invCount_' + SPREADSHEET_ID;
+  try {
+    const cached = cache.get(cacheKey);
+    if (cached) return parseInt(cached, 10);
+  } catch (_) {}
+  try {
+    const ss    = SpreadsheetApp.openById(SPREADSHEET_ID);
+    const sheet = ss.getSheetByName('เครื่องว่าง');
+    if (!sheet) return 0;
+    const lastRow = sheet.getLastRow();
+    const count   = Math.max(0, lastRow - 1);
+    try { cache.put(cacheKey, String(count), 300); } catch (_) {}
+    return count;
+  } catch (_) {
+    return 0;
+  }
+}
+
+/**
+ * Batch update: อัปเดตหลายคนพร้อมกัน (Admin เท่านั้น)
+ * items: [{ userId, source_sheet, borrowStatusSelect, docStatusSelect, note }]
+ */
+function adminBatchUpdate(items, editorName) {
+  if (!items || !Array.isArray(items) || !items.length) {
+    return { success: false, message: 'ไม่มีรายการที่จะอัปเดต' };
+  }
+  const lock = LockService.getScriptLock();
+  let lockAcquired = false;
+  try {
+    lockAcquired = lock.tryLock(12000);
+    if (!lockAcquired) return { success: false, message: 'ระบบยุ่งอยู่ กรุณาลองใหม่' };
+
+    const ss         = SpreadsheetApp.openById(SPREADSHEET_ID);
+    const sheetLog   = ss.getSheetByName(SHEET_NAMES.DATA_DB);
+    const timestamp  = new Date();
+    const editor     = 'ADMIN: ' + (editorName || 'ผู้ดูแลระบบ');
+    let   updated    = 0;
+
+    const sheetCache = {}; // cache sheet values per sheetName
+    const logRows    = [];
+
+    items.forEach(function(item) {
+      if (!item.userId || !item.source_sheet) return;
+      const sheetName = item.source_sheet;
+      if (!sheetCache[sheetName]) {
+        const s = ss.getSheetByName(sheetName);
+        if (s) sheetCache[sheetName] = { sheet: s, values: s.getDataRange().getValues() };
+      }
+      const sc = sheetCache[sheetName];
+      if (!sc) return;
+      const isTeacher = sheetName === SHEET_NAMES.TEACHERS;
+      for (let i = 1; i < sc.values.length; i++) {
+        const rowId = isTeacher ? ('T-' + String(sc.values[i][0])) : String(sc.values[i][1]);
+        if (rowId === String(item.userId)) {
+          if (item.borrowStatusSelect) {
+            sc.sheet.getRange(i + 1, 11).setValue(item.borrowStatusSelect);
+            sc.values[i][10] = item.borrowStatusSelect;
+          }
+          if (item.docStatusSelect) {
+            sc.sheet.getRange(i + 1, 12).setValue(item.docStatusSelect);
+            sc.values[i][11] = item.docStatusSelect;
+          }
+          logRows.push([
+            timestamp, item.userId, item.userName || '-', item.userType || 'student',
+            item.userRoom || '-', item.userSerial || '-',
+            editor, item.note || 'Batch update', item.borrowStatusSelect || '-',
+            '', '', '', '', ''
+          ]);
+          updated++;
+          break;
+        }
+      }
+    });
+
+    if (sheetLog && logRows.length) {
+      sheetLog.getRange(sheetLog.getLastRow() + 1, 1, logRows.length, 14).setValues(logRows);
+    }
+    SpreadsheetApp.flush();
+    invalidateSystemDataCache();
+    return { success: true, updated: updated, message: 'อัปเดต ' + updated + ' รายการเรียบร้อย' };
+  } catch (e) {
+    return { success: false, message: 'เกิดข้อผิดพลาด: ' + e.toString() };
+  } finally {
+    if (lockAcquired) try { lock.releaseLock(); } catch(_) {}
+  }
 }
 
 // ==========================================
@@ -1287,7 +1501,8 @@ function advisorAddStudent(data) {
       }
     }
     const nextNo = sheet.getLastRow(); // ใช้จำนวน row เป็นลำดับที่
-    sheet.appendRow([nextNo, String(data.id).trim(), data.name.trim(), data.room || '']);
+    const serialVal = data.serial && data.serial !== '-' ? String(data.serial).trim() : '-';
+    sheet.appendRow([nextNo, String(data.id).trim(), data.name.trim(), data.room || '', '', '', serialVal]);
 
     // บันทึก Log
     const logSheet = ss.getSheetByName(SHEET_NAMES.DATA_DB);
