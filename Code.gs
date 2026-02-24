@@ -1257,3 +1257,152 @@ function processInventoryChanges(oldSerial, newSerial, newStatus, userName) {
   
   return newSerial; // คืนค่า Serial ล่าสุดกลับไปบันทึก
 }
+// ==========================================
+// ฟังก์ชันจัดการรายชื่อนักเรียนโดยครูที่ปรึกษา
+// เพิ่มต่อท้ายไฟล์ Code.gs (ก่อน closing บรรทัดสุดท้าย)
+// ==========================================
+
+/**
+ * ครูที่ปรึกษา: เพิ่มนักเรียนใหม่ในห้องตัวเอง
+ * data: { targetSheet, id, name, room, advisorLevel, advisorRoom, editorName }
+ */
+function advisorAddStudent(data) {
+  if (!data || !data.targetSheet || !data.name || !data.id) {
+    return { success: false, message: 'ข้อมูลไม่ครบถ้วน (ชื่อ, รหัส)' };
+  }
+  // ป้องกันการแก้ไขชีตที่ไม่ใช่ชีตนักเรียน
+  if (SHEET_NAMES.STUDENTS.indexOf(data.targetSheet) < 0) {
+    return { success: false, message: 'ไม่มีสิทธิ์เพิ่มในชีตนี้' };
+  }
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const sheet = ss.getSheetByName(data.targetSheet);
+  if (!sheet) return { success: false, message: 'ไม่พบแผ่นงาน: ' + data.targetSheet };
+
+  try {
+    // ตรวจสอบว่ารหัสนักเรียนซ้ำหรือไม่
+    const existing = sheet.getDataRange().getValues();
+    for (let i = 1; i < existing.length; i++) {
+      if (String(existing[i][1]).trim() === String(data.id).trim()) {
+        return { success: false, message: 'รหัสนักเรียน ' + data.id + ' มีอยู่ในระบบแล้ว' };
+      }
+    }
+    const nextNo = sheet.getLastRow(); // ใช้จำนวน row เป็นลำดับที่
+    sheet.appendRow([nextNo, String(data.id).trim(), data.name.trim(), data.room || '']);
+
+    // บันทึก Log
+    const logSheet = ss.getSheetByName(SHEET_NAMES.DATA_DB);
+    if (logSheet) {
+      logSheet.appendRow([
+        new Date(), data.id, data.name, 'student', data.room || '', '-',
+        'ADVISOR_ADD_STUDENT', 'เพิ่มรายชื่อนักเรียนโดย: ' + (data.editorName || 'ครูที่ปรึกษา'),
+        'ยังไม่ยืม', '', '', '', '', ''
+      ]);
+    }
+
+    invalidateSystemDataCache();
+    return { success: true, message: 'เพิ่มรายชื่อ "' + data.name + '" เรียบร้อยแล้ว' };
+  } catch (e) {
+    return { success: false, message: 'เกิดข้อผิดพลาด: ' + e.toString() };
+  }
+}
+
+/**
+ * ครูที่ปรึกษา: แก้ไขข้อมูลนักเรียน (ชื่อ, รหัส, ห้อง) ในห้องตัวเอง
+ * data: { id, newName, newId, newRoom, source_sheet, editorName }
+ */
+function advisorEditStudent(data) {
+  if (!data || !data.id || !data.source_sheet) {
+    return { success: false, message: 'ข้อมูลไม่ครบถ้วน' };
+  }
+  if (SHEET_NAMES.STUDENTS.indexOf(data.source_sheet) < 0) {
+    return { success: false, message: 'ไม่มีสิทธิ์แก้ไขในชีตนี้' };
+  }
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const sheet = ss.getSheetByName(data.source_sheet);
+  if (!sheet) return { success: false, message: 'ไม่พบแผ่นงาน: ' + data.source_sheet };
+
+  try {
+    const values = sheet.getDataRange().getValues();
+    let rowFound = -1;
+    for (let i = 1; i < values.length; i++) {
+      if (String(values[i][1]).trim() === String(data.id).trim()) {
+        rowFound = i + 1; // 1-based row number
+        break;
+      }
+    }
+    if (rowFound < 0) return { success: false, message: 'ไม่พบนักเรียนรหัส ' + data.id };
+
+    // ตรวจสอบรหัสใหม่ไม่ซ้ำ (ถ้ามีการเปลี่ยน)
+    if (data.newId && String(data.newId).trim() !== String(data.id).trim()) {
+      for (let i = 1; i < values.length; i++) {
+        if (String(values[i][1]).trim() === String(data.newId).trim() && (i + 1) !== rowFound) {
+          return { success: false, message: 'รหัสนักเรียน ' + data.newId + ' มีอยู่ในระบบแล้ว' };
+        }
+      }
+      sheet.getRange(rowFound, 2).setValue(String(data.newId).trim());
+    }
+    if (data.newName) sheet.getRange(rowFound, 3).setValue(data.newName.trim());
+    if (data.newRoom !== undefined && data.newRoom !== null) sheet.getRange(rowFound, 4).setValue(data.newRoom);
+
+    // บันทึก Log
+    const logSheet = ss.getSheetByName(SHEET_NAMES.DATA_DB);
+    if (logSheet) {
+      logSheet.appendRow([
+        new Date(), data.newId || data.id, data.newName || values[rowFound-1][2], 'student', data.newRoom || values[rowFound-1][3], '-',
+        'ADVISOR_EDIT_STUDENT', 'แก้ไขข้อมูลนักเรียนโดย: ' + (data.editorName || 'ครูที่ปรึกษา') +
+          ' | เดิม: รหัส=' + data.id + ' ชื่อ=' + values[rowFound-1][2],
+        '-', '', '', '', '', ''
+      ]);
+    }
+
+    invalidateSystemDataCache();
+    return { success: true, message: 'แก้ไขข้อมูลนักเรียนเรียบร้อยแล้ว' };
+  } catch (e) {
+    return { success: false, message: 'เกิดข้อผิดพลาด: ' + e.toString() };
+  }
+}
+
+/**
+ * ครูที่ปรึกษา: ลบนักเรียนออกจากห้องตัวเอง
+ * data: { id, name, source_sheet, editorName }
+ */
+function advisorDeleteStudent(data) {
+  if (!data || !data.id || !data.source_sheet) {
+    return { success: false, message: 'ข้อมูลไม่ครบถ้วน' };
+  }
+  if (SHEET_NAMES.STUDENTS.indexOf(data.source_sheet) < 0) {
+    return { success: false, message: 'ไม่มีสิทธิ์ลบในชีตนี้ (สามารถลบได้เฉพาะนักเรียนเท่านั้น)' };
+  }
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const sheet = ss.getSheetByName(data.source_sheet);
+  if (!sheet) return { success: false, message: 'ไม่พบแผ่นงาน: ' + data.source_sheet };
+
+  try {
+    const values = sheet.getDataRange().getDisplayValues();
+    let rowToDelete = -1;
+    for (let i = 1; i < values.length; i++) {
+      if (String(values[i][1]).trim() === String(data.id).trim()) {
+        rowToDelete = i + 1;
+        break;
+      }
+    }
+    if (rowToDelete < 0) return { success: false, message: 'ไม่พบนักเรียนรหัส ' + data.id };
+
+    // บันทึก Log ก่อนลบ
+    const logSheet = ss.getSheetByName(SHEET_NAMES.DATA_DB);
+    if (logSheet) {
+      logSheet.appendRow([
+        new Date(), data.id, data.name || '-', 'student', '-', '-',
+        'ADVISOR_DELETE_STUDENT', 'ลบรายชื่อนักเรียนโดย: ' + (data.editorName || 'ครูที่ปรึกษา'),
+        'ลบออกจากระบบ', '', '', '', '', ''
+      ]);
+    }
+
+    sheet.deleteRow(rowToDelete);
+    invalidateSystemDataCache();
+    return { success: true, message: 'ลบรายชื่อ "' + (data.name || data.id) + '" เรียบร้อยแล้ว' };
+  } catch (e) {
+    return { success: false, message: 'เกิดข้อผิดพลาด: ' + e.toString() };
+  }
+}
+
