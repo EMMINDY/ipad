@@ -1018,11 +1018,16 @@ function exitAdmin() { currentUser = null; goLanding(); }
 function loadAdminView() {
   showGlobalLoading('กำลังโหลดรายชื่อทั้งหมด...');
   _loadSystemDataWithRetry(0, function() {
-    updateAdminUIForRole();
-    updateAdminStats();
-    _updateModeButtonCounts();
-    filterAdminTable();
-    hideGlobalLoading();
+    try {
+      updateAdminUIForRole();
+      updateAdminStats();
+      _updateModeButtonCounts();
+      filterAdminTable();
+    } catch (e) {
+      console.error('loadAdminView error:', e);
+    } finally {
+      hideGlobalLoading();
+    }
   }, function(err) { hideGlobalLoading(); showError(err); });
 }
 
@@ -1048,11 +1053,16 @@ function updateAdminUIForRole() {
         ' &nbsp;|&nbsp; ดูแลห้อง: <span class="badge bg-primary">' + escapeHtml(lvDisplay) + '/' + escapeHtml(currentUser.room || '-') + '</span>';
     }
     if (filterBox)  filterBox.classList.add('d-none');
-    if (btnAddUser) btnAddUser.style.display = 'none';
     if (btnAudit)   btnAudit.style.display   = 'none';
     if (btnRefresh) btnRefresh.style.display  = 'none';
     if (btnExport)  btnExport.style.display   = 'none';
     if (btnReport)  btnReport.style.display   = 'none';
+    // ✅ ครูที่ปรึกษา: แสดงปุ่มเพิ่มนักเรียนในห้องตัวเอง
+    if (btnAddUser) {
+      btnAddUser.style.display = '';
+      btnAddUser.title = 'เพิ่มนักเรียนในห้องของฉัน';
+      btnAddUser.onclick = function() { openAdvisorAddStudentModal(); };
+    }
   } else {
     if (titleEl) titleEl.textContent = 'ผู้ดูแลระบบ';
     if (roleEl) roleEl.innerHTML = 'กำลังใช้งานสิทธิ์: <span class="fw-bold text-danger">แอดมิน</span>';
@@ -1193,8 +1203,15 @@ function filterAdminTable() {
 }
 
 function renderAdminTable(rows, preserveLevel, preserveRoom) {
-  if (adminDataTableInstance) {
-    try { adminDataTableInstance.destroy(); } catch (e) {}
+  // ── ทำลาย DataTables instance เดิมก่อนสร้างใหม่ (ป้องกัน re-init error) ──
+  try {
+    if (adminDataTableInstance) {
+      adminDataTableInstance.destroy();
+      adminDataTableInstance = null;
+    } else if ($.fn.DataTable.isDataTable('#adminTable')) {
+      $('#adminTable').DataTable().destroy();
+    }
+  } catch (e) {
     adminDataTableInstance = null;
   }
 
@@ -1223,6 +1240,7 @@ function renderAdminTable(rows, preserveLevel, preserveRoom) {
   var isAdvisor = currentUser && currentUser.role === 'advisor';
   var isAdmin   = currentUser && currentUser.role === 'admin';
   var tbody     = document.querySelector('#adminTable tbody');
+  if (!tbody) return; // ป้องกัน null pointer
 
   tbody.innerHTML = rows.map(function (r) {
     var bs       = r.borrowStatus || 'ยังไม่ยืม';
@@ -1255,6 +1273,14 @@ function renderAdminTable(rows, preserveLevel, preserveRoom) {
     if (isAdvisor && bs === 'ยืมอยู่') {
       action += ' <button class="btn btn-sm btn-outline-warning text-dark" onclick="openAdvisorReturnModal(\'' + safeId + '\')" title="ส่งคืน iPad">' +
                 '<i class="fas fa-undo"></i></button>';
+    }
+
+    // ✅ ครูที่ปรึกษา: ปุ่มแก้ไข / ลบรายชื่อนักเรียน
+    if (isAdvisor && r.type !== 'teacher') {
+      action += ' <button class="btn btn-sm btn-outline-secondary" onclick="openAdvisorStudentEditModal(\'' + safeId + '\',\'' + safeSheet + '\')" title="แก้ไขข้อมูลนักเรียน">' +
+                '<i class="fas fa-pen"></i></button>';
+      action += ' <button class="btn btn-sm btn-outline-danger" onclick="advisorConfirmDeleteStudent(\'' + safeId + '\',\'' + safeSheet + '\',\'' + safeName + '\')" title="ลบรายชื่อนักเรียน">' +
+                '<i class="fas fa-trash"></i></button>';
     }
 
     var rowClass = '';
@@ -1891,4 +1917,124 @@ $(document).on('hide.bs.modal', '#previewModal', function () {
   if (iframeEl) iframeEl.src = '';
   _previewScale = 1; _previewRotation = 0;
 });
+
+// ==========================================
+// ADVISOR: จัดการรายชื่อนักเรียน (เพิ่ม / แก้ไข / ลบ)
+// ==========================================
+
+function openAdvisorAddStudentModal() {
+  if (!currentUser || currentUser.role !== 'advisor') return;
+  var rawLevel = String(currentUser.level || '').trim();
+  if (rawLevel.indexOf('ม.') < 0) rawLevel = 'ม.' + rawLevel;
+  var allSheets = [];
+  systemData.forEach(function(r){ var s = r.source_sheet||''; if(s && allSheets.indexOf(s)<0) allSheets.push(s); });
+  var targetSheet = allSheets.find(function(l){
+    return l.indexOf('นักเรียน') >= 0 && l.indexOf(rawLevel) >= 0;
+  }) || '';
+  var el = document.getElementById('advisorAdd_targetSheet');
+  if (el) el.value = targetSheet;
+  var roomEl = document.getElementById('advisorAdd_room');
+  if (roomEl) roomEl.value = currentUser.room || '';
+  var sheetLabel = document.getElementById('advisorAdd_sheetLabel');
+  if (sheetLabel) sheetLabel.textContent = (targetSheet.replace('รายชื่อนักเรียน ', '') || '-') + ' ห้อง ' + (currentUser.room || '-');
+  ['advisorAdd_id', 'advisorAdd_name'].forEach(function(id){
+    var e = document.getElementById(id); if (e) e.value = '';
+  });
+  $('#advisorAddStudentModal').modal('show');
+}
+
+function saveAdvisorAddStudent() {
+  var targetSheet = ((document.getElementById('advisorAdd_targetSheet') || {}).value || '').trim();
+  var name        = ((document.getElementById('advisorAdd_name')        || {}).value || '').trim();
+  var id          = ((document.getElementById('advisorAdd_id')          || {}).value || '').trim();
+  var room        = ((document.getElementById('advisorAdd_room')         || {}).value || '').trim();
+  if (!name)        { Swal.fire({ icon: 'warning', title: 'กรุณากรอกชื่อ-นามสกุล' }); return; }
+  if (!id)          { Swal.fire({ icon: 'warning', title: 'กรุณากรอกรหัสนักเรียน' }); return; }
+  if (!targetSheet) { Swal.fire({ icon: 'warning', title: 'ไม่พบข้อมูลห้องเรียน กรุณา Login ใหม่' }); return; }
+  showGlobalLoading('กำลังเพิ่มรายชื่อ...');
+  google.script.run
+    .withSuccessHandler(function(res) {
+      hideGlobalLoading();
+      if (res.success) {
+        showToast(res.message, 'success');
+        $('#advisorAddStudentModal').modal('hide');
+        systemData.push({
+          type: 'student', no: systemData.length + 1,
+          id: id, name: name, room: room, source_sheet: targetSheet,
+          serial: '-', borrowStatus: 'ยังไม่ยืม', docStatus: 'ยังไม่ส่ง',
+          returnDocStatus: 'ยังไม่ส่ง', files: {}, returnDocUrl: '', inAsset: false
+        });
+        updateAdminStats(); _updateModeButtonCounts(); filterAdminTable();
+      } else { Swal.fire({ icon: 'error', title: 'เกิดข้อผิดพลาด', text: res.message }); }
+    })
+    .withFailureHandler(function(err) { hideGlobalLoading(); showError(err); })
+    .advisorAddStudent({ targetSheet: targetSheet, id: id, name: name, room: room,
+      advisorLevel: currentUser ? currentUser.level : '',
+      advisorRoom:  currentUser ? currentUser.room  : '',
+      editorName:   currentUser ? currentUser.name  : '' });
+}
+
+function openAdvisorStudentEditModal(id, sheet) {
+  var p = systemData.find(function(x){
+    return String(x.id) === String(id) && (x.source_sheet || '') === (sheet || '');
+  });
+  if (!p) { showError('ไม่พบข้อมูลนักเรียน'); return; }
+  var setVal = function(elId, v) { var e = document.getElementById(elId); if (e) e.value = v; };
+  setVal('advisorEdit_origId',    p.id);
+  setVal('advisorEdit_origSheet', p.source_sheet || '');
+  setVal('advisorEdit_id',        p.id);
+  setVal('advisorEdit_name',      p.name  || '');
+  setVal('advisorEdit_room',      p.room  || '');
+  $('#advisorStudentEditModal').modal('show');
+}
+
+function saveAdvisorEditStudent() {
+  var origId  = ((document.getElementById('advisorEdit_origId')    || {}).value || '').trim();
+  var sheet   = ((document.getElementById('advisorEdit_origSheet')  || {}).value || '').trim();
+  var newId   = ((document.getElementById('advisorEdit_id')   || {}).value || '').trim();
+  var newName = ((document.getElementById('advisorEdit_name') || {}).value || '').trim();
+  var newRoom = ((document.getElementById('advisorEdit_room') || {}).value || '').trim();
+  if (!newName) { Swal.fire({ icon: 'warning', title: 'กรุณากรอกชื่อ-นามสกุล' }); return; }
+  if (!newId)   { Swal.fire({ icon: 'warning', title: 'กรุณากรอกรหัสนักเรียน' }); return; }
+  showGlobalLoading('กำลังบันทึกการแก้ไข...');
+  google.script.run
+    .withSuccessHandler(function(res) {
+      hideGlobalLoading();
+      if (res.success) {
+        showToast(res.message, 'success');
+        $('#advisorStudentEditModal').modal('hide');
+        for (var i = 0; i < systemData.length; i++) {
+          if (String(systemData[i].id) === String(origId) && (systemData[i].source_sheet || '') === sheet) {
+            systemData[i].id = newId; systemData[i].name = newName; systemData[i].room = newRoom; break;
+          }
+        }
+        updateAdminStats(); _updateModeButtonCounts(); filterAdminTable();
+      } else { Swal.fire({ icon: 'error', title: 'เกิดข้อผิดพลาด', text: res.message }); }
+    })
+    .withFailureHandler(function(err) { hideGlobalLoading(); showError(err); })
+    .advisorEditStudent({ id: origId, newId: newId, newName: newName, newRoom: newRoom,
+      source_sheet: sheet, editorName: currentUser ? currentUser.name : '' });
+}
+
+function advisorConfirmDeleteStudent(id, sheet, name) {
+  Swal.fire({
+    title: 'ลบ "' + escapeHtml(name) + '" ออกจากรายชื่อ?',
+    html: '<div class="text-danger small mt-1"><i class="fas fa-exclamation-triangle me-1"></i>การกระทำนี้ไม่สามารถย้อนกลับได้</div>',
+    icon: 'warning', showCancelButton: true,
+    confirmButtonText: '<i class="fas fa-trash me-1"></i>ลบรายชื่อ',
+    cancelButtonText: 'ยกเลิก', confirmButtonColor: '#dc3545'
+  }).then(function(res) {
+    if (!res.isConfirmed) return;
+    showGlobalLoading('กำลังลบรายชื่อ...');
+    google.script.run
+      .withSuccessHandler(function(r) {
+        hideGlobalLoading();
+        if (r.success) { showToast(r.message, 'success'); _localDeletePerson(id, sheet); }
+        else { Swal.fire({ icon: 'error', title: 'เกิดข้อผิดพลาด', text: r.message }); }
+      })
+      .withFailureHandler(function(err) { hideGlobalLoading(); showError(err); })
+      .advisorDeleteStudent({ id: id, name: name, source_sheet: sheet,
+        editorName: currentUser ? currentUser.name : '' });
+  });
+}
 </script>
