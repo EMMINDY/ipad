@@ -37,18 +37,114 @@ function include(filename) {
   return HtmlService.createHtmlOutputFromFile(filename).getContent(); 
 }
 
-/** เคลียร์ Cache ข้อมูลหลักเมื่อมีการอัปเดต */
+/** เคลียร์ Cache */
 function invalidateSystemDataCache() {
   try {
     const cache = CacheService.getScriptCache();
-    // ลบทั้ง key หลักและ chunk keys
-    cache.remove('systemData_' + SPREADSHEET_ID);
-    cache.remove('systemData_' + SPREADSHEET_ID + '_meta');
-    cache.remove('systemData_' + SPREADSHEET_ID + '_1');
-    cache.remove('systemData_' + SPREADSHEET_ID + '_2');
-    cache.remove('systemData_' + SPREADSHEET_ID + '_3');
-    cache.remove('systemData_' + SPREADSHEET_ID + '_4');
+    const keys = ['systemData_' + SPREADSHEET_ID,
+                  'systemData_' + SPREADSHEET_ID + '_meta',
+                  'quickStats_'  + SPREADSHEET_ID];
+    for (let i = 1; i <= 20; i++) keys.push('systemData_' + SPREADSHEET_ID + '_' + i);
+    // removeAll รองรับ array สูงสุด 100 keys
+    cache.removeAll(keys);
   } catch (_) {}
+}
+
+/**
+ * Warm-up: โหลดข้อมูลล่วงหน้าเข้า Cache
+ * รันผ่าน Time Trigger ทุก 5 นาที เพื่อให้ผู้ใช้ได้ข้อมูลจาก cache เสมอ
+ */
+function warmUpCache() {
+  try {
+    invalidateSystemDataCache();
+    const data = getAllSystemData();
+    Logger.log('warmUpCache OK: ' + data.length + ' records');
+  } catch (e) {
+    Logger.log('warmUpCache error: ' + e.toString());
+  }
+}
+
+/**
+ * สร้าง Time Trigger สำหรับ warm-up cache ทุก 5 นาที
+ * รัน createWarmUpTrigger() ครั้งเดียวจาก Apps Script Editor
+ */
+function createWarmUpTrigger() {
+  const triggers = ScriptApp.getProjectTriggers();
+  triggers.forEach(t => {
+    if (t.getHandlerFunction() === 'warmUpCache' ||
+        t.getHandlerFunction() === 'refreshAndSyncData') {
+      ScriptApp.deleteTrigger(t);
+    }
+  });
+  ScriptApp.newTrigger('warmUpCache').timeBased().everyMinutes(5).create();
+  Logger.log('✅ warmUpCache Trigger created (every 5 min)');
+}
+
+/** Helper: อ่าน cache แบบ chunk */
+function _readCacheChunked(cache, cacheKey) {
+  try {
+    const metaRaw = cache.get(cacheKey + '_meta');
+    if (metaRaw) {
+      const meta = JSON.parse(metaRaw);
+      const keys = [];
+      for (let c = 1; c <= meta.chunks; c++) keys.push(cacheKey + '_' + c);
+      const parts = cache.getAll(keys);
+      let combined = '';
+      for (let c = 1; c <= meta.chunks; c++) {
+        const p = parts[cacheKey + '_' + c];
+        if (!p) return null;
+        combined += p;
+      }
+      return JSON.parse(combined);
+    }
+    const cached = cache.get(cacheKey);
+    if (cached) return JSON.parse(cached);
+  } catch (_) {}
+  return null;
+}
+
+/** Helper: เขียน cache แบบ chunk + putAll */
+function _writeCacheChunked(cache, cacheKey, data, ttl) {
+  try {
+    const serialized = JSON.stringify(data);
+    const CHUNK = 90000;
+    if (serialized.length <= CHUNK) {
+      cache.put(cacheKey, serialized, ttl);
+    } else {
+      const total = Math.ceil(serialized.length / CHUNK);
+      const toStore = {};
+      for (let c = 0; c < total; c++) {
+        toStore[cacheKey + '_' + (c+1)] = serialized.slice(c*CHUNK, (c+1)*CHUNK);
+      }
+      toStore[cacheKey + '_meta'] = JSON.stringify({ chunks: total });
+      cache.putAll(toStore, ttl);
+    }
+  } catch (_) {}
+}
+
+/**
+ * สถิติเบื้องต้นสำหรับ Dashboard (เร็วมาก — cache แยก 5 นาที)
+ */
+function getQuickStats() {
+  const cache = CacheService.getScriptCache();
+  const key   = 'quickStats_' + SPREADSHEET_ID;
+  try {
+    const cached = cache.get(key);
+    if (cached) return JSON.parse(cached);
+  } catch (_) {}
+
+  const data = getAllSystemData();
+  const stats = { total: data.length, borrowed: 0, notBorrowed: 0, returned: 0, levels: {} };
+  data.forEach(function(p) {
+    const s = p.borrowStatus || '';
+    if (s === 'ยืมอยู่' || s === 'อยู่ระหว่างการส่งคืน') stats.borrowed++;
+    else if (s === 'คืนแล้ว') stats.returned++;
+    else stats.notBorrowed++;
+    const src = p.source_sheet || '-';
+    stats.levels[src] = (stats.levels[src] || 0) + 1;
+  });
+  try { cache.put(key, JSON.stringify(stats), 300); } catch (_) {}
+  return stats;
 }
 
 /** ฟังก์ชันปรับชื่อให้สะอาดที่สุดเพื่อการจับคู่ที่แม่นยำ */
@@ -88,67 +184,40 @@ function getEditDistance(a, b) {
 // ==========================================
 
 function getAllSystemData() {
-  const cache = CacheService.getScriptCache();
+  const cache    = CacheService.getScriptCache();
   const cacheKey = 'systemData_' + SPREADSHEET_ID;
 
-  // ── FIX #6: รองรับ Cache หลาย Chunk (กัน overflow 100KB) ──
-  try {
-    const metaRaw = cache.get(cacheKey + '_meta');
-    if (metaRaw) {
-      const meta = JSON.parse(metaRaw);
-      let combined = [];
-      let allFound = true;
-      for (let c = 1; c <= meta.chunks; c++) {
-        const part = cache.get(cacheKey + '_' + c);
-        if (!part) { allFound = false; break; }
-        combined = combined.concat(JSON.parse(part));
-      }
-      if (allFound && combined.length > 0) return combined;
-    } else {
-      // ลอง key เดิม (ไม่มี chunk)
-      const cached = cache.get(cacheKey);
-      if (cached) {
-        try { return JSON.parse(cached); } catch (_) {}
-      }
-    }
-  } catch (_) {}
+  // ── อ่าน Cache ก่อนเสมอ (ไม่ต้องรอ lock) ──
+  const cached1 = _readCacheChunked(cache, cacheKey);
+  if (cached1 && cached1.length > 0) return cached1;
 
-  // ── FIX #7: LockService ป้องกัน Thundering Herd ──
-  // ถ้ามีหลาย request พร้อมกัน ให้คิวรอ request แรกที่คำนวณเสร็จ
+  // ── พยายามขอ Lock เพื่อกัน request ซ้ำซ้อน ──
+  // ใช้ getScriptLock (รองรับ Web App — getDocumentLock ใช้ได้เฉพาะ bound script)
   const lock = LockService.getScriptLock();
+  let lockAcquired = false;
   try {
-    lock.waitLock(15000); // รอสูงสุด 15 วินาที
-  } catch (e) {
-    throw new Error("ระบบยุ่งอยู่ กรุณารีเฟรชใหม่อีกครั้ง");
+    // รอสูงสุด 10 วินาที — ถ้าไม่ได้ก็ไม่เป็นไร ทำงานต่อได้
+    lock.waitLock(10000);
+    lockAcquired = true;
+  } catch (_) {
+    // lock timeout: ตรวจ cache อีกครั้งก่อน proceed
+    // (request ก่อนหน้าอาจเขียน cache เสร็จแล้วระหว่างที่เรารอ)
+    const cachedRetry = _readCacheChunked(cache, cacheKey);
+    if (cachedRetry && cachedRetry.length > 0) return cachedRetry;
+    // ถ้ายังไม่มี: ดำเนินการต่อโดยไม่มี lock
+    // (อาจเกิดการคำนวณซ้ำ แต่ดีกว่า throw error ใส่ผู้ใช้)
   }
 
-  // ตรวจ Cache อีกครั้งหลังได้ Lock (อาจมี request ก่อนหน้าคำนวณเสร็จแล้ว)
-  try {
-    const metaRaw2 = cache.get(cacheKey + '_meta');
-    if (metaRaw2) {
-      const meta2 = JSON.parse(metaRaw2);
-      let combined2 = [];
-      let allFound2 = true;
-      for (let c = 1; c <= meta2.chunks; c++) {
-        const part = cache.get(cacheKey + '_' + c);
-        if (!part) { allFound2 = false; break; }
-        combined2 = combined2.concat(JSON.parse(part));
-      }
-      if (allFound2 && combined2.length > 0) {
+  // ── ถ้าได้ lock: ตรวจ cache อีกครั้ง (request ก่อนหน้าอาจสร้างไว้แล้ว) ──
+  if (lockAcquired) {
+    try {
+      const cached2 = _readCacheChunked(cache, cacheKey);
+      if (cached2 && cached2.length > 0) {
         lock.releaseLock();
-        return combined2;
+        return cached2;
       }
-    } else {
-      const cached2 = cache.get(cacheKey);
-      if (cached2) {
-        try {
-          const parsed2 = JSON.parse(cached2);
-          lock.releaseLock();
-          return parsed2;
-        } catch (_) {}
-      }
-    }
-  } catch (_) {}
+    } catch (_) {}
+  }
 
   let allPeople = [];
   try {
@@ -365,27 +434,8 @@ function getAllSystemData() {
       }
     }
 
-    // ── FIX #1 + #6: Cache 600 วินาที + รองรับ chunk เมื่อ >90KB ──
-    try {
-      const serialized = JSON.stringify(allPeople);
-      const CHUNK_SIZE = 85000; // 85KB ต่อ chunk (เผื่อ overhead)
-
-      if (serialized.length <= CHUNK_SIZE) {
-        // เก็บ key เดียว (เดิม 60 → ปรับเป็น 600 วินาที)
-        cache.put(cacheKey, serialized, 600);
-      } else {
-        // แบ่ง chunk
-        const totalChunks = Math.ceil(serialized.length / CHUNK_SIZE);
-        for (let c = 0; c < totalChunks; c++) {
-          cache.put(
-            cacheKey + '_' + (c + 1),
-            serialized.slice(c * CHUNK_SIZE, (c + 1) * CHUNK_SIZE),
-            600
-          );
-        }
-        cache.put(cacheKey + '_meta', JSON.stringify({ chunks: totalChunks }), 600);
-      }
-    } catch (_) { /* cache เต็มหรือ error ไม่กระทบผลลัพธ์ */ }
+    // ── Cache 600 วินาที + chunk batch ──
+    _writeCacheChunked(cache, cacheKey, allPeople, 600);
 
     return allPeople;
 
@@ -393,7 +443,7 @@ function getAllSystemData() {
     invalidateSystemDataCache();
     throw new Error("ไม่สามารถโหลดข้อมูลได้: " + e.toString());
   } finally {
-    try { lock.releaseLock(); } catch (_) {}
+    try { if (lockAcquired) lock.releaseLock(); } catch (_) {}
   }
 }
 
