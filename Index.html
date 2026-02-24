@@ -833,6 +833,94 @@
     </div>
   </div>
 
+    <div class="modal fade" id="advisorAddStudentModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content rounded-4 border-0 shadow">
+      <div class="modal-header border-0" style="background: linear-gradient(135deg,#0d6efd,#6610f2); color:white;">
+        <h6 class="modal-title fw-bold">
+          <i class="fas fa-user-plus me-2"></i>เพิ่มนักเรียนในห้องของฉัน
+        </h6>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="advisorAdd_targetSheet">
+        <input type="hidden" id="advisorAdd_room">
+
+        <!-- แสดงห้องที่จะเพิ่ม -->
+        <div class="alert alert-info border-0 rounded-3 py-2 mb-3 small">
+          <i class="fas fa-door-open me-1"></i>
+          เพิ่มเข้าชั้น: <strong id="advisorAdd_sheetLabel">-</strong>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label small fw-bold">รหัสนักเรียน <span class="text-danger">*</span></label>
+          <input type="text" id="advisorAdd_id" class="form-control rounded-3"
+                 placeholder="เช่น 37001, 65001" inputmode="numeric">
+        </div>
+        <div class="mb-3">
+          <label class="form-label small fw-bold">ชื่อ-นามสกุล <span class="text-danger">*</span></label>
+          <input type="text" id="advisorAdd_name" class="form-control rounded-3"
+                 placeholder="เช่น นายสมชาย ใจดี">
+        </div>
+      </div>
+      <div class="modal-footer border-0 pt-0">
+        <button type="button" class="btn btn-light rounded-pill px-4" data-bs-dismiss="modal">ยกเลิก</button>
+        <button type="button" class="btn btn-primary rounded-pill px-4 fw-bold" onclick="saveAdvisorAddStudent()">
+          <i class="fas fa-plus me-1"></i>เพิ่มรายชื่อ
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ✅ ADVISOR: Modal แก้ไขข้อมูลนักเรียน -->
+<div class="modal fade" id="advisorStudentEditModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content rounded-4 border-0 shadow">
+      <div class="modal-header border-0" style="background: linear-gradient(135deg,#fd7e14,#dc3545); color:white;">
+        <h6 class="modal-title fw-bold">
+          <i class="fas fa-user-edit me-2"></i>แก้ไขข้อมูลนักเรียน
+        </h6>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="advisorEdit_origId">
+        <input type="hidden" id="advisorEdit_origSheet">
+
+        <div class="mb-3">
+          <label class="form-label small fw-bold">รหัสนักเรียน <span class="text-danger">*</span></label>
+          <input type="text" id="advisorEdit_id" class="form-control rounded-3"
+                 placeholder="รหัสนักเรียน">
+        </div>
+        <div class="mb-3">
+          <label class="form-label small fw-bold">ชื่อ-นามสกุล <span class="text-danger">*</span></label>
+          <input type="text" id="advisorEdit_name" class="form-control rounded-3"
+                 placeholder="ชื่อ-นามสกุล">
+        </div>
+        <div class="mb-3">
+          <label class="form-label small fw-bold">ห้อง</label>
+          <input type="text" id="advisorEdit_room" class="form-control rounded-3"
+                 placeholder="เช่น 1, 2, 3...">
+        </div>
+
+        <div class="alert alert-warning border-0 rounded-3 py-2 small mb-0">
+          <i class="fas fa-info-circle me-1"></i>
+          การแก้ไขรหัสนักเรียนจะไม่กระทบข้อมูลการยืม-คืน iPad ที่มีอยู่แล้ว
+        </div>
+      </div>
+      <div class="modal-footer border-0 pt-0">
+        <button type="button" class="btn btn-light rounded-pill px-4" data-bs-dismiss="modal">ยกเลิก</button>
+        <button type="button" class="btn btn-warning rounded-pill px-4 fw-bold text-dark" onclick="saveAdvisorEditStudent()">
+          <i class="fas fa-save me-1"></i>บันทึกการแก้ไข
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+
+
   <!-- ADD USER MODAL -->
   <div class="modal fade" id="adminAddUserModal" tabindex="-1">
     <div class="modal-dialog modal-dialog-centered">
